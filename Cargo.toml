@@ -1,0 +1,19 @@
+[package]
+name = "pubcrawl"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = { version = "0.8.4", features = ["macros", "ws"] }
+axum-htmx = "0.8.1"
+dotenvy = "0.15.7"
+listenfd = "1.0.2"
+maud = { version = "0.27.0", features = ["axum"] }
+notify = "8.2.0"
+redis = { version = "0.32.5", features = ["tokio-comp", "connection-manager"] }
+redis-derive = { version = "0.2.0", git = "https://github.com/kkharji/redis-derive" }
+serde = { version = "1.0.225", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.47.1", features = ["full"] }
+tower-http = { version = "0.6.6", features = ["fs"] }
+tower-livereload = "0.9.6"
