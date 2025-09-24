@@ -150,6 +150,7 @@ async fn root(State(state): State<AppState>) -> impl IntoResponse {
             link rel="stylesheet" href="/static/css/style.min.css";
             script src="/static/js/htmx.min.js" {}
             script src="https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.2" crossorigin="anonymous" {}
+            script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js" crossorigin="anonymous" {}
             script src="/static/js/script.js" {}
         }
         body hx-ext="sse" {
@@ -184,7 +185,10 @@ fn pubs_markup(pubs: Iter<String, Pub>) -> Markup {
             div
                 class="card dark:bg-opacity-100 bg-opacity-80 m-1 border-l-6 shadow backdrop-blur-2xl text-black"
                 style={"background-color:"(color)}
+                data-id=(name)
             {
+                // TODO: Update the value to the same as pubcrawl
+                input type="hidden" name="item" value=(count) id={"pub-value-"(name)};
                 div class="card-body" {
                     div class="card-header flex flex-row justify-between" {
                         h2 class="card-title text-xl" {
@@ -322,6 +326,7 @@ async fn pub_updates_sse(
                     PubChange::Count(PubName(name), Pub { color, count, capacity }) =>
                         (name.clone(),
                         html! {
+                            input type="hidden" name="item" value=(count) hx-swap-oob={"outerHTML:#pub-value-"(name)} id={"pub-value-"(name)};
                             span hx-swap-oob=(format!("innerHTML:#{name}-count")) { (count) }
                             (pub_progress_bar(&name, &color, &count, &capacity))
                         }),
