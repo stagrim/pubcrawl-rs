@@ -9,7 +9,7 @@ pub async fn start_background_thread(
     mut con: ConnectionManager,
     mut rx: UnboundedReceiver<PushInfo>,
     pubs: Arc<RwLock<HashMap<String, Pub>>>,
-    mut pub_change_sender: Sender<PubChange>,
+    pub_change_sender: Sender<PubChange>,
 ) {
     tokio::spawn(async move {
         con.subscribe(&["pub_updates"]).await.unwrap();
@@ -72,7 +72,7 @@ pub async fn start_background_thread(
                 match serde_json::from_str::<PubChange>(&payload_str) {
                     Ok(update) => {
                         println!("Successfully deserialized update: {:?}", update);
-                        pub_change_sender.send(update).unwrap();
+                        pub_change_sender.send(update);
                         //TODO: Send it to the listening websocket threads
                     }
                     Err(e) => {

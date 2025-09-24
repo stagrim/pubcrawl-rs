@@ -2,3 +2,20 @@
 @config "./tailwind.config.js";
 @source "./src/**/*.rs";
 @plugin "daisyui";
+
+.rs-progress {
+    @apply overflow-hidden rounded-2xl;
+    background-color: color-mix(in oklab, currentColor 20%, transparent);
+}
+
+.rs-progress-bar {
+    @apply float-left w-0 h-full transition-all;
+}
+
+.text-white .rs-progress-bar {
+    background-color: var(--color-base-content);
+}
+
+.text-black .rs-progress-bar {
+    background-color: black;
+}

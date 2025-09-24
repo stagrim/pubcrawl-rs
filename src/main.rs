@@ -1,17 +1,24 @@
-use std::{collections::HashMap, env, net::SocketAddr, path::Path, sync::Arc};
+use std::{
+    collections::{HashMap, hash_map::Iter},
+    convert::Infallible,
+    env,
+    ops::Div,
+    path::Path,
+    sync::Arc,
+};
 
 use axum::{
     Form, Router,
-    extract::{
-        ConnectInfo, Request, State, WebSocketUpgrade,
-        ws::{Message, WebSocket},
+    extract::{Request, State},
+    response::{
+        IntoResponse, Sse,
+        sse::{Event, KeepAlive},
     },
-    response::IntoResponse,
-    routing::{any, get, get_service, post},
+    routing::{get, get_service, post},
 };
-use dotenvy::dotenv;
+use futures::{Stream, StreamExt};
 use listenfd::ListenFd;
-use maud::html;
+use maud::{Markup, html};
 use notify::Watcher;
 use redis::{
     AsyncCommands, Client,
@@ -25,7 +32,9 @@ use tokio::{
         broadcast::{self, Receiver, Sender},
     },
 };
+use tokio_stream::wrappers::BroadcastStream;
 use tower_http::services::ServeDir;
+#[cfg(debug_assertions)]
 use tower_livereload::LiveReloadLayer;
 
 use crate::r#pub::{Pub, PubChange, PubName};
@@ -44,24 +53,93 @@ async fn increase(
 ) -> impl IntoResponse {
     let mut pubs = pubs.write().await;
     //TODO: Error handling on not found
-    let new_count: usize = con.hincr(format!("pub:{name}"), "count", 1).await.unwrap();
+    // let new_count: usize = con.hincr(format!("pub:{name}"), "count", 1).await.unwrap();
+    let key = format!("pub:{name}");
+    // let updated_pub: Pub = redis::transaction(&mut con, &[key], |con, pipe| async {
+    //     let new_count: usize = con.hincr(format!("pub:{name}"), "count", 1).await.unwrap();
+    // })
+    let (new_count, updated_pub): (usize, Pub) = redis::pipe()
+        .atomic()
+        .hincr(format!("pub:{name}"), "count", 1)
+        // .ignore()
+        .hgetall(format!("pub:{name}"))
+        .query_async(&mut con)
+        .await
+        .unwrap();
     pubs.entry(name.clone()).and_modify(|p| p.count = new_count);
     let _: () = con
         .publish(
             "pub_updates",
-            serde_json::to_string(&PubChange::Count(PubName(name), new_count)).unwrap(),
+            serde_json::to_string(&PubChange::Count(PubName(name), updated_pub)).unwrap(),
         )
         .await
         .unwrap();
-
-    html! {
-        (new_count)
-    }
 }
 
-// Axum handler to serve the Maud markup
-async fn handler(State(state): State<AppState>) -> impl IntoResponse {
-    let num = 0;
+async fn reset(
+    State(AppState { mut con, pubs, .. }): State<AppState>,
+    Form(IncreaseRequest { name }): Form<IncreaseRequest>,
+) -> impl IntoResponse {
+    let mut pubs = pubs.write().await;
+    //TODO: Error handling on not found
+    let (new_count, updated_pub): (usize, Pub) = redis::pipe()
+        .atomic()
+        .hset(format!("pub:{name}"), "count", 0)
+        // .ignore()
+        .hgetall(format!("pub:{name}"))
+        .query_async(&mut con)
+        .await
+        .unwrap();
+    pubs.entry(name.clone()).and_modify(|p| p.count = new_count);
+    let _: () = con
+        .publish(
+            "pub_updates",
+            serde_json::to_string(&PubChange::Count(PubName(name), updated_pub)).unwrap(),
+        )
+        .await
+        .unwrap();
+}
+
+#[derive(Deserialize)]
+struct CreatePub {
+    name: String,
+    capacity: usize,
+    color: String,
+}
+
+async fn create_pub(
+    State(AppState { mut con, pubs, .. }): State<AppState>,
+    Form(CreatePub {
+        name,
+        capacity,
+        color,
+    }): Form<CreatePub>,
+) -> impl IntoResponse {
+    // TODO: Add some regex check here for invalid characters, like ' :"' '
+    let mut pubs = pubs.write().await;
+    let new_pub = Pub {
+        color,
+        count: 0,
+        capacity,
+    };
+    let _ = redis::cmd("HSET")
+        .arg(format!("pub:{name}"))
+        .arg(&new_pub)
+        .exec_async(&mut con)
+        .await
+        .unwrap();
+    pubs.insert(name, new_pub);
+
+    let _: () = con
+        .publish(
+            "pub_updates",
+            serde_json::to_string(&PubChange::Reload).unwrap(),
+        )
+        .await
+        .unwrap();
+}
+
+async fn root(State(state): State<AppState>) -> impl IntoResponse {
     let pubs = state.pubs.read().await;
 
     html! {
@@ -71,29 +149,72 @@ async fn handler(State(state): State<AppState>) -> impl IntoResponse {
             title { "Rust + HTMX + Tailwind + Maud" }
             link rel="stylesheet" href="/static/css/style.min.css";
             script src="/static/js/htmx.min.js" {}
-            script src="https://cdn.jsdelivr.net/npm/htmx-ext-ws@2.0.2" crossorigin="anonymous" {}
+            script src="https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.2" crossorigin="anonymous" {}
+            script src="/static/js/script.js" {}
         }
-        body  {
-            h1 { "Hello from Maud! hello ✨" }
-            div class="p-10 bg-blue-800" {
-                p { "This div is styled with Tailwind CSS." }
+        body hx-ext="sse" {
+            div id="pubs" sse-connect="/pub-updates" sse-swap="message" {
+                (pubs_markup(pubs.iter()))
             }
 
-            div id="pubs" hx-ext="ws" ws-connect="/pub-updates" {
-
-                @for (name, Pub { color, count, capacity }) in pubs.iter() {
-                    p id="pub-{name}" { (name)": " span id=(format!("{name}-count")) {(count)} " / "(capacity) }
-                }
-            }
-
-            form {
+            form class="mt-5" {
                 select name="name" {
                     @for (name, _) in pubs.iter() {
                         option value=(name) { (name) }
                     }
                 }
-                button.btn hx-post="/increase" {"+"}
+                button.btn hx-post="/increase" hx-swap="none" {"+"}
+                button.btn hx-post="/reset" hx-swap="none" {"0"}
             }
+
+            form class="mt-5" {
+                label { "Create pub " }
+                input class="input" placeholder="name" name="name";
+                input class="input" type="number" placeholder="capacity" name="capacity";
+                input class="input" placeholder="color" name="color";
+                button.btn hx-swap="none" hx-post="/create" { "Create" }
+            }
+        }
+    }
+}
+
+fn pubs_markup(pubs: Iter<String, Pub>) -> Markup {
+    html! {
+        @for (name, Pub { color, count, capacity }) in pubs {
+            div
+                class="card dark:bg-opacity-100 bg-opacity-80 m-1 border-l-6 shadow backdrop-blur-2xl text-black"
+                style={"background-color:"(color)}
+            {
+                div class="card-body" {
+                    div class="card-header flex flex-row justify-between" {
+                        h2 class="card-title text-xl" {
+                            (name)
+                        }
+                        div class="flex flex-col" {
+                            p id={"pub-"(name)} class="text-2xl font-bold" {
+                                span id=(format!("{name}-count")) {(count)}"/"(capacity)
+                            }
+                        }
+                    }
+                    div class="flex flex-row items-center gap-2" {
+                        div class="flex flex-row items-center" {
+                            span class="text-nowrap whitespace-pre" { "Queue: Short" }
+                            span class="status-shadow m-1 rounded-4xl p-1 shadow-lg bg-success" {}
+                        }
+                        div class="flex-grow-1" sse-swap=(name) {
+                            (pub_progress_bar(name, color, count, capacity))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn pub_progress_bar(name: &str, color: &str, count: &usize, capacity: &usize) -> Markup {
+    html! {
+        div class="rs-progress h-3" id={ "pub-"(name)"-pb" } role="progressbar" aria-valuemin=(count) aria-valuemax=(capacity) aria-valuenow="0" aria-labelledby="pblabel" {
+            div id={"pub-"(name)"-pb-inner"} class="rs-progress-bar" style={"width:"((*count as f32).div(*capacity as f32) * 100f32)"%"} {}
         }
     }
 }
@@ -118,6 +239,7 @@ async fn main() {
 
     let livereload = LiveReloadLayer::new();
     let reloader = livereload.reloader();
+    println!("Connecting to db on redis://127.0.0.1:6388/?protocol=resp3");
     let redis_client = Client::open("redis://127.0.0.1:6388/?protocol=resp3").unwrap();
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -137,9 +259,11 @@ async fn main() {
     let state = AppState { con, pubs, tx };
 
     let app = Router::new()
-        .route("/", get(handler))
+        .route("/", get(root))
         .route("/increase", post(increase))
-        .route("/pub-updates", any(pub_updates_ws))
+        .route("/reset", post(reset))
+        .route("/create", post(create_pub))
+        .route("/pub-updates", get(pub_updates_sse))
         .nest_service("/static", get_service(ServeDir::new("static")))
         .with_state(state);
 
@@ -169,38 +293,50 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn pub_updates_ws(
-    ws: WebSocketUpgrade,
-    // ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    State(AppState { tx, .. }): State<AppState>,
-) -> impl IntoResponse {
-    // println!("{addr} connected.");
-    // finalize the upgrade process by returning upgrade callback.
-    // we can customize the callback by sending additional info such as address.
-    ws.on_upgrade(move |socket| pub_updates_handle(socket, tx.subscribe()))
-}
+async fn pub_updates_sse(
+    State(AppState { pubs, tx, .. }): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    // TODO: Include more info in the change events? Include the entire pub??
+    let rx: Receiver<PubChange> = tx.subscribe();
 
-async fn pub_updates_handle(mut socket: WebSocket, mut rx: Receiver<PubChange>) {
-    // Send blob first? Or at least update all counts and capacities
+    let pubs_state = pubs.clone();
+    let current_state = futures::stream::once(async move {
+        // TODO: use custom event here also, and avoid using random string, and switch to constants
+        Ok(Event::default().data(
+            html! {
+                (pubs_markup(pubs_state.read().await.iter()))
+            }
+            .into_string(),
+        ))
+    });
 
-    loop {
-        let change = rx.recv().await.unwrap();
-        println!("Received pubchange: {change:?}");
-        socket
-            .send(Message::Text(
-                html! {
-                    @match change {
-                        PubChange::Count(PubName(name), c) => span id=(format!("{name}-count")) { (c) },
-                        // PubChange::Capacity(pub_name, _) => (todo!()),
-                        // PubChange::Color(pub_name, _) => (todo!()),
-                        // PubChange::Reload => (todo!()),
-                        _ => span {"test"},
-                    }
-                }
-                .into_string()
-                .into(),
-            ))
-            .await
-            .unwrap();
-    }
+    let update_stream = BroadcastStream::new(rx)
+        // TODO: Error handling
+        .then(move |change|  {
+        let pubs = pubs.clone();
+        async move {
+            let change = change.unwrap();
+            println!("Received pubchange: {change:?}");
+            let (name, snippet) =
+                match change {
+                    PubChange::Count(PubName(name), Pub { color, count, capacity }) =>
+                        (name.clone(),
+                        html! {
+                            span hx-swap-oob=(format!("innerHTML:#{name}-count")) { (count) }
+                            (pub_progress_bar(&name, &color, &count, &capacity))
+                        }),
+                    // PubChange::Capacity(pub_name, _) => (todo!()),
+                    // PubChange::Color(pub_name, _) => (todo!()),
+                    PubChange::Reload =>  ("reload".to_string(), html! {div id="pubs" hx-swap-oob="InnerHTML:#pubs" { (pubs_markup(pubs.read().await.iter())) }}),
+                    _ => ("reload".to_string(), html! {span {"test"}}),
+
+            };
+            Ok(Event::default()
+            //TODO: Event must have prefix to not mess with my commands
+                .event(name)
+                .data(snippet.into_string()))
+        }
+        });
+
+    Sse::new(current_state.chain(update_stream)).keep_alive(KeepAlive::default())
 }
