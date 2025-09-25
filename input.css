@@ -3,13 +3,21 @@
 @source "./src/**/*.rs";
 @plugin "daisyui";
 
+@plugin "daisyui/theme" {
+    name: "dark";
+    prefersdark: true;
+    --radius-box: 1rem;
+    --radius-field: 0.5rem;
+    --radius-selector: 1rem;
+}
+
 .rs-progress {
     @apply overflow-hidden rounded-2xl;
     background-color: color-mix(in oklab, currentColor 20%, transparent);
 }
 
 .rs-progress-bar {
-    @apply float-left w-0 h-full transition-all;
+    @apply float-left w-0 h-full transition-all rounded-2xl;
 }
 
 .text-white .rs-progress-bar {

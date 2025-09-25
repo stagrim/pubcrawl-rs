@@ -19,6 +19,7 @@ pub enum PubChange {
     Count(PubName, Pub),
     Capacity(PubName, Pub),
     Color(PubName, Pub),
-    Queue(PubName, Pub),
+    NewPub(PubName, Pub),
+    // Queue(PubName, Pub),
     Reload,
 }

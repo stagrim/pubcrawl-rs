@@ -5,31 +5,32 @@ document.addEventListener("htmx:sseBeforeMessage", (e) => {
 let sortable
 
 document.addEventListener('htmx:load', function (event) {
-    console.log("onLoad")
     const sortableList = document.getElementById('pubs')
     sortable = new Sortable(sortableList, {
         animation: 150,
         disabled: true, // Disable dragging
     })
-
 })
 
 let debounceTimeout
 
-document.addEventListener('htmx:afterSettle', function (evt) {
-    // Clear any existing timeout
+document.addEventListener('htmx:afterSettle', function () {
     clearTimeout(debounceTimeout)
 
     debounceTimeout = setTimeout(() => {
-        console.log("Settle")
         const sortableList = document.getElementById('pubs')
-        const cards = sortableList.children
+        const cards = sortableList.querySelectorAll('.card')
 
         // Create an array of objects linking each card's ID to its input value
         const itemsToSort = Array.from(cards).map(card => {
             const id = card.dataset.id
             const input = card.querySelector('input[type="hidden"]')
-            const value = parseInt(input.value, 10)
+            let value
+            try {
+                value = parseInt(input.value)
+            } catch {
+                value = 0
+            }
             return { id, value }
         })
 
