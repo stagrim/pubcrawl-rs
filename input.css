@@ -21,9 +21,9 @@
 }
 
 .text-white .rs-progress-bar {
-    background-color: var(--color-base-content);
+    background-color: var(--color-white);
 }
 
 .text-black .rs-progress-bar {
-    background-color: black;
+    background-color: var(--color-black);
 }

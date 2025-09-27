@@ -4,12 +4,14 @@ document.addEventListener("htmx:sseBeforeMessage", (e) => {
 
 let sortable
 
-document.addEventListener('htmx:load', function (event) {
+document.addEventListener('htmx:load', function () {
     const sortableList = document.getElementById('pubs')
-    sortable = new Sortable(sortableList, {
-        animation: 150,
-        disabled: true, // Disable dragging
-    })
+    if (sortableList) {
+        sortable = new Sortable(sortableList, {
+            animation: 150,
+            disabled: true, // Disable dragging
+        })
+    }
 })
 
 let debounceTimeout
@@ -19,6 +21,10 @@ document.addEventListener('htmx:afterSettle', function () {
 
     debounceTimeout = setTimeout(() => {
         const sortableList = document.getElementById('pubs')
+        if (!sortableList) {
+            return
+        }
+
         const cards = sortableList.querySelectorAll('.card')
 
         // Create an array of objects linking each card's ID to its input value
@@ -34,14 +40,16 @@ document.addEventListener('htmx:afterSettle', function () {
             return { id, value }
         })
 
-        // Sort the array of objects based on the 'value' property
-        itemsToSort.sort((a, b) => b.value - a.value)
+        if (itemsToSort.length > 0) {
+            // Sort the array of objects based on the 'value' property
+            itemsToSort.sort((a, b) => b.value - a.value)
 
-        // Extract just the IDs from the sorted array into a new array
-        const newOrder = itemsToSort.map(item => item.id)
+            // Extract just the IDs from the sorted array into a new array
+            const newOrder = itemsToSort.map(item => item.id)
 
-        //TODO: Only run if order changes
-        sortable.sort(newOrder, true)
+            //TODO: Only run if order changes
+            sortable.sort(newOrder, true)
+        }
 
     }, 150)
 })

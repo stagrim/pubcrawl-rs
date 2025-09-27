@@ -1,305 +1,33 @@
-use std::{
-    collections::{HashMap, hash_map::Iter},
-    convert::Infallible,
-    env,
-    ops::Div,
-    path::Path,
-    sync::Arc,
-};
+use std::{collections::HashMap, env, path::Path, sync::Arc};
 
 use axum::{
-    Form, Router,
-    extract::{Request, State},
-    response::{
-        IntoResponse, Sse,
-        sse::{Event, KeepAlive},
-    },
+    Router,
+    extract::Request,
     routing::{get, get_service, post},
 };
-use futures::{Stream, StreamExt};
 use listenfd::ListenFd;
-use maud::{Markup, html};
 use notify::Watcher;
 use redis::{
-    AsyncCommands, Client,
+    Client,
     aio::{ConnectionManager, ConnectionManagerConfig},
 };
-use serde::Deserialize;
 use tokio::{
     net::TcpListener,
     sync::{
         RwLock,
-        broadcast::{self, Receiver, Sender},
+        broadcast::{self, Sender},
     },
 };
-use tokio_stream::wrappers::BroadcastStream;
+use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
 #[cfg(debug_assertions)]
 use tower_livereload::LiveReloadLayer;
 
-use crate::r#pub::{Pub, PubChange, PubName};
+use crate::r#pub::{Pub, PubChange};
 
 mod db;
 mod r#pub;
-
-#[derive(Deserialize)]
-struct IncreaseRequest {
-    name: String,
-}
-
-async fn increase(
-    State(AppState { mut con, pubs, .. }): State<AppState>,
-    Form(IncreaseRequest { name }): Form<IncreaseRequest>,
-) -> impl IntoResponse {
-    let mut pubs = pubs.write().await;
-    //TODO: Error handling on not found
-    let key = format!("pub:{name}");
-    let (new_count, updated_pub): (usize, Pub) = redis::pipe()
-        .atomic()
-        .hincr(&key, "count", 1)
-        // .ignore()
-        .hgetall(&key)
-        .query_async(&mut con)
-        .await
-        .unwrap();
-    pubs.entry(name.clone()).and_modify(|p| p.count = new_count);
-    let _: () = con
-        .publish(
-            "pub_updates",
-            serde_json::to_string(&PubChange::Count(PubName(name), updated_pub)).unwrap(),
-        )
-        .await
-        .unwrap();
-}
-
-async fn reset(
-    State(AppState { mut con, pubs, .. }): State<AppState>,
-    Form(IncreaseRequest { name }): Form<IncreaseRequest>,
-) -> impl IntoResponse {
-    let mut pubs = pubs.write().await;
-    //TODO: Error handling on not found
-    let key = format!("pub:{name}");
-    let (new_count, updated_pub): (usize, Pub) = redis::pipe()
-        .atomic()
-        .hset(&key, "count", 0)
-        .hgetall(&key)
-        .query_async(&mut con)
-        .await
-        .unwrap();
-    pubs.entry(name.clone()).and_modify(|p| p.count = new_count);
-    let _: () = con
-        .publish(
-            "pub_updates",
-            serde_json::to_string(&PubChange::Count(PubName(name), updated_pub)).unwrap(),
-        )
-        .await
-        .unwrap();
-}
-
-#[derive(Deserialize)]
-struct CreatePub {
-    name: String,
-    capacity: usize,
-    color: String,
-}
-
-async fn create_pub(
-    State(AppState { mut con, pubs, .. }): State<AppState>,
-    Form(CreatePub {
-        name,
-        capacity,
-        color,
-    }): Form<CreatePub>,
-) -> impl IntoResponse {
-    // TODO: Add some regex check here for invalid characters, like ' :"' '
-    let mut pubs = pubs.write().await;
-    let new_pub = Pub {
-        color,
-        count: 0,
-        capacity,
-    };
-    let _ = redis::cmd("HSET")
-        .arg(format!("pub:{name}"))
-        .arg(&new_pub)
-        .exec_async(&mut con)
-        .await
-        .unwrap();
-    pubs.insert(name.clone(), new_pub.clone());
-
-    let _: () = con
-        .publish(
-            "pub_updates",
-            serde_json::to_string(&PubChange::NewPub(PubName(name), new_pub)).unwrap(),
-        )
-        .await
-        .unwrap();
-}
-
-async fn root(State(state): State<AppState>) -> impl IntoResponse {
-    let pubs = state.pubs.read().await;
-
-    html! {
-        (maud::DOCTYPE)
-        head {
-            meta charset="utf-8";
-            title { "Pubcrawl" }
-            link rel="icon" href="static/icons/favicon-512x512.png";
-            link rel="stylesheet" href="/static/css/style.min.css";
-            script src="/static/js/htmx.min.js" {}
-            script src="https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.2" crossorigin="anonymous" {}
-            script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js" crossorigin="anonymous" {}
-            script src="/static/js/script.js" {}
-        }
-        body hx-ext="sse" {
-            nav class="navbar dark:bg-base-300 bg-blue-800 text-white shadow-lg" {
-                div class="navbar-start" {
-                    a href="/" {
-                        img class="dark:hidden hidden!" src="/static/icons/favicon-512x512.png" alt="Pubcrawl logo" width="54" {}
-                        img class="block" src="/static/icons/favicon-white-512x512.png" alt="Pubcrawl logo" width="54" {}
-                    }
-                    a class="btn btn-ghost text-2xl font-bold" href="/" { "Pubcrawl" }
-                }
-                div class="navbar-middle hidden lg:inline-flex" {
-                    a class="btn btn-ghost" href="/about" { "About" }
-                }
-                div class="navbar-end" {
-                    a class="btn btn-ghost hidden lg:inline-flex" href="/count" { "Count" }
-                }
-                div class="dropdown dropdown-end" {
-                    div tabindex="0" role="button" class="btn btn-ghost lg:hidden" {
-                        svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" {
-                            path fill="currentColor" d="M4 18q-.425 0-.712-.288T3 17t.288-.712T4 16h16q.425 0 .713.288T21 17t-.288.713T20 18zm0-5q-.425 0-.712-.288T3 12t.288-.712T4 11h16q.425 0 .713.288T21 12t-.288.713T20 13zm0-5q-.425 0-.712-.288T3 7t.288-.712T4 6h16q.425 0 .713.288T21 7t-.288.713T20 8z" {}
-                        }
-                    }
-                    ul tabindex="0" class="menu menu-sm dropdown-content rounded-box dark:bg-base-300 z-1 mt-3 w-52 bg-blue-800 p-2 text-white shadow" {
-                        li { a class="btn btn-outline m-1" href="/about" { "About" } }
-                        li { a class="btn btn-outline m-1" href="/count" { "Count" } }
-                    }
-                }
-            }
-            div class="m-0 flex min-h-screen w-screen flex-col p-0" {
-                main class="mx-auto mt-3 flex w-11/12 flex-grow flex-col text-center sm:w-10/12 sm:text-left lg:w-8/12" {
-
-                    // div id="pubs" sse-connect="/pub-updates" sse-swap="message" hx-swap="none" {
-                    div id="pubs" sse-connect="/pub-updates" {
-                        (pubs_markup(pubs.iter()))
-
-                        // Subscribe the the 'message' event which will be used to send oob responses
-                        span sse-swap="message" hx-swap="none" {}
-                    }
-
-
-                    form class="mt-5" {
-                        select name="name" {
-                            @for (name, _) in pubs.iter() {
-                                option value=(name) { (name) }
-                            }
-                        }
-                        button.btn hx-post="/increase" hx-swap="none" {"+"}
-                        button.btn hx-post="/reset" hx-swap="none" {"0"}
-                    }
-
-                    form class="mt-5" {
-                        label { "Create pub " }
-                        input class="input" placeholder="name" name="name";
-                        input class="input" type="number" placeholder="capacity" name="capacity";
-                        input class="input" placeholder="color" name="color";
-                        button.btn hx-swap="none" hx-post="/create" { "Create" }
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn pubs_markup(pubs: Iter<String, Pub>) -> Markup {
-    let mut pubs = pubs
-        .map(|(name, p)| (name, p, pub_order_weight(p)))
-        .collect::<Vec<_>>();
-    pubs.sort_unstable_by_key(|(_, _, weight)| -weight);
-
-    html! {
-        @for (name, p, weight) in pubs {
-            (pub_markup(name, p, weight))
-        }
-    }
-}
-
-fn pub_markup(name: &str, p: &Pub, weight: isize) -> Markup {
-    html! {
-        div
-            class={
-                "card dark:bg-opacity-100 bg-opacity-80 m-1 border-l-6 shadow backdrop-blur-2xl border-[color-mix(in_oklab,currentColor_15%,transparent)] "
-                (if is_black_text(&p.color) {"text-black"} else {"text-white"})
-            }
-            style={"background-color:"(p.color)}
-            data-id=(name)
-        {
-            input type="hidden" name="item" value=(weight) id={"pub-value-"(name)};
-            div class="card-body" {
-                div class="card-header flex flex-row justify-between" {
-                    h2 class="card-title text-xl" {
-                        (name)
-                    }
-                    div class="flex flex-col" {
-                        p id={"pub-"(name)} class="text-2xl font-bold" {
-                            span id=(format!("{name}-count")) {(p.count)}"/"(p.capacity)
-                        }
-                    }
-                }
-                div class="flex flex-row items-center gap-2" {
-                    div class="flex flex-row items-center" {
-                        span class="text-nowrap whitespace-pre" { "Queue: Short" }
-                        span class="status-shadow m-1 rounded-4xl p-1 shadow-lg bg-success" {}
-                    }
-                    div class="flex-grow-1" sse-swap=(name) {
-                        (pub_progress_bar(name, &p))
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn pub_order_weight(p: &Pub) -> isize {
-    (p.count as f32 / p.capacity as f32 * 1000_000.0) as isize
-}
-
-fn pub_progress_bar(name: &str, p: &Pub) -> Markup {
-    html! {
-        div class="rs-progress h-3" id={ "pub-"(name)"-pb" } role="progressbar" aria-valuemin=(p.count) aria-valuemax=(p.capacity) aria-valuenow="0" aria-labelledby="pblabel" {
-            div id={"pub-"(name)"-pb-inner"} class="rs-progress-bar" style={"width:"((p.count as f32).div(p.capacity as f32) * 100f32)"%"} {}
-        }
-    }
-}
-
-// TODO: Better error handling with options instead
-fn is_black_text(color: &str) -> bool {
-    let hex_part = &color[1..];
-
-    let full_hex = if hex_part.len() == 3 {
-        let mut expanded = String::with_capacity(6);
-        for c in hex_part.chars() {
-            expanded.push(c);
-            expanded.push(c);
-        }
-        expanded
-    } else if hex_part.len() == 6 {
-        hex_part.to_string()
-    } else {
-        panic!("Invalid length");
-    };
-
-    let red_str = &full_hex[0..2];
-    let green_str = &full_hex[2..4];
-    let blue_str = &full_hex[4..6];
-
-    let red = usize::from_str_radix(red_str, 16).unwrap();
-    let green = usize::from_str_radix(green_str, 16).unwrap();
-    let blue = usize::from_str_radix(blue_str, 16).unwrap();
-
-    ((red * 299 + green * 587 + blue * 114) / 1000) > 125
-}
+mod routes;
 
 fn not_htmx_predicate<T>(req: &Request<T>) -> bool {
     !req.headers().contains_key("hx-request")
@@ -339,13 +67,19 @@ async fn main() {
     let state = AppState { con, pubs, tx };
 
     let app = Router::new()
-        .route("/", get(root))
-        .route("/increase", post(increase))
-        .route("/reset", post(reset))
-        .route("/create", post(create_pub))
-        .route("/pub-updates", get(pub_updates_sse))
+        .route("/", get(routes::pubs::pubs))
+        .route("/admin", get(routes::admin::admin))
+        .route("/count", get(routes::count::count))
+        .nest(
+            "/pub",
+            Router::new()
+                .route("/create", post(routes::admin::create_pub))
+                .route("/increase", post(routes::count::increase)),
+        )
+        .route("/pub-updates", get(routes::sse::pubs::pub_updates))
         .nest_service("/static", get_service(ServeDir::new("static")))
-        .with_state(state);
+        .with_state(state)
+        .layer(CookieManagerLayer::new());
 
     #[cfg(debug_assertions)]
     let livereload = LiveReloadLayer::new();
@@ -375,58 +109,4 @@ async fn main() {
 
     println!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app).await.unwrap();
-}
-
-async fn pub_updates_sse(
-    State(AppState { pubs, tx, .. }): State<AppState>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    // TODO: Include more info in the change events? Include the entire pub??
-    let rx: Receiver<PubChange> = tx.subscribe();
-
-    let pubs_state = pubs.clone();
-    let current_state = futures::stream::once(async move {
-        // TODO: use custom event here also, and avoid using random string, and switch to constants
-        Ok(Event::default().data(
-            html! {
-                (pubs_markup(pubs_state.read().await.iter()))
-            }
-            .into_string(),
-        ))
-    });
-
-    let update_stream = BroadcastStream::new(rx)
-        // TODO: Error handling
-        .then(move |change|  {
-            let pubs = pubs.clone();
-            async move {
-                let change = change.unwrap();
-                println!("Received pubchange: {change:?}");
-                let (name, snippet) =
-                    match change {
-                        PubChange::Count(PubName(name), p) =>
-                            (name.clone(),
-                            html! {
-                                input type="hidden" name="item" value=(pub_order_weight(&p)) hx-swap-oob={"outerHTML:#pub-value-"(name)} id={"pub-value-"(name)};
-                                span hx-swap-oob=(format!("innerHTML:#{name}-count")) { (p.count) }
-                                (pub_progress_bar(&name, &p))
-                            }),
-                        PubChange::NewPub(PubName(name), p) =>
-                            ("message".into(),
-                            html! {
-                                div hx-swap-oob="beforeend:#pubs" { (pub_markup(&name, &p, 0)) }
-                            }),
-                        // PubChange::Capacity(pub_name, _) => (todo!()),
-                        // PubChange::Color(pub_name, _) => (todo!()),
-                        PubChange::Reload =>  ("reload".to_string(), html! {div id="pubs" hx-swap-oob="InnerHTML:#pubs" { (pubs_markup(pubs.read().await.iter())) }}),
-                        _ => ("reload".to_string(), html! {span {"test"}}),
-
-                };
-                Ok(Event::default()
-                //TODO: Event must have prefix to not mess with my commands
-                    .event(name)
-                    .data(snippet.into_string()))
-            }
-        });
-
-    Sse::new(current_state.chain(update_stream)).keep_alive(KeepAlive::default())
 }
