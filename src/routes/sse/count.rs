@@ -61,14 +61,7 @@ pub async fn count(
                         span {(p.count)}
                     },
                 ),
-                PubChange::Queue(PubName(name), p) => (
-                    EVENT_QUEUE,
-                    html! {
-                        div hx-swap-oob=("innerHTML:#count-queue") {
-                            (queue(&name, &p))
-                        }
-                    },
-                ),
+                PubChange::Queue(PubName(name), p) => (EVENT_QUEUE, queue(&name, &p)),
                 _ => todo!(),
             };
             Ok(Event::default()

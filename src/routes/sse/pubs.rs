@@ -67,7 +67,7 @@ pub async fn pub_updates(
                         PubChange::Reload =>  ("reload".to_string(), html! {div id="pubs" hx-swap-oob="InnerHTML:#pubs" { (pubs_markup(pubs.read().await.iter())) }}),
                         PubChange::Queue(PubName(name), p) => (name.clone(),
                             html! {
-                                span hx-swap-oob={"innerHTML:#pub-"(name)"-queue"} {
+                                span hx-swap-oob={"outerHTML:#pub-"(name)"-queue"} {
                                     (pub_queue(&name, &p))
                                 }
                                 (pub_progress_bar(&name, &p))
