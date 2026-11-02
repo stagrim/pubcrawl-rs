@@ -2,3 +2,6 @@ node_modules
 target
 dev/redis-data
 static/css/style.min.css
+*.zst
+*.gz
+.env

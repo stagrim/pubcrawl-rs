@@ -60,6 +60,9 @@ pub async fn start_background_thread(
                                 pubs.insert(name, p);
                             }
                             PubChange::Reload => todo!(),
+                            PubChange::Queue(PubName(name), updated_pub) => {
+                                pubs.entry(name).and_modify(|p| p.queue = updated_pub.queue);
+                            }
                         }
 
                         // Notify SSE threads of update

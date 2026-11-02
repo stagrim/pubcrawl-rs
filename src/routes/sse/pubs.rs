@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     response::{
         Sse,
         sse::{Event, KeepAlive},
@@ -9,14 +9,20 @@ use axum::{
 };
 use futures::Stream;
 use maud::html;
+use serde::Deserialize;
 use tokio::sync::broadcast::Receiver;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 use crate::{
     AppState,
     r#pub::{PubChange, PubName},
-    routes::pubs::{pub_markup, pub_order_weight, pub_progress_bar, pubs_markup},
+    routes::pubs::{pub_markup, pub_order_weight, pub_progress_bar, pub_queue, pubs_markup},
 };
+
+#[derive(Deserialize)]
+pub struct PubSSE {
+    name: String,
+}
 
 pub async fn pub_updates(
     State(AppState { pubs, tx, .. }): State<AppState>,
@@ -56,12 +62,18 @@ pub async fn pub_updates(
                             html! {
                                 div hx-swap-oob="beforeend:#pubs" { (pub_markup(&name, &p, 0)) }
                             }),
-                        PubChange::Capacity(pub_name, _) => (todo!()),
-                        PubChange::Color(pub_name, _) => (todo!()),
+                        PubChange::Capacity(pub_name, _) => todo!(),
+                        PubChange::Color(pub_name, _) => todo!(),
                         PubChange::Reload =>  ("reload".to_string(), html! {div id="pubs" hx-swap-oob="InnerHTML:#pubs" { (pubs_markup(pubs.read().await.iter())) }}),
-                        // _ => ("reload".to_string(), html! {span {"test"}}),
-
-                };
+                        PubChange::Queue(PubName(name), p) => (name.clone(),
+                            html! {
+                                span hx-swap-oob={"innerHTML:#pub-"(name)"-queue"} {
+                                    (pub_queue(&name, &p))
+                                }
+                                (pub_progress_bar(&name, &p))
+                            }
+                        ),
+                    };
                 Ok(Event::default()
                 //TODO: Event must have prefix to not mess with my commands
                     .event(name)

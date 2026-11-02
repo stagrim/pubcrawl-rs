@@ -3,8 +3,10 @@ use std::{collections::HashMap, env, path::Path, sync::Arc};
 use axum::{
     Router,
     extract::Request,
-    routing::{get, get_service, post},
+    middleware,
+    routing::{get, post},
 };
+use dotenvy::dotenv;
 use listenfd::ListenFd;
 use notify::Watcher;
 use redis::{
@@ -23,12 +25,16 @@ use tower_http::services::ServeDir;
 #[cfg(debug_assertions)]
 use tower_livereload::LiveReloadLayer;
 
-use crate::r#pub::{Pub, PubChange};
+use crate::{
+    r#pub::{Pub, PubChange},
+    routes::utils::compress_sse::compress_sse,
+};
 
 mod db;
 mod r#pub;
 mod routes;
 
+#[cfg(debug_assertions)]
 fn not_htmx_predicate<T>(req: &Request<T>) -> bool {
     !req.headers().contains_key("hx-request")
 }
@@ -42,7 +48,7 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-    // let _ = dotenv();
+    let _ = dotenv();
 
     let port = env::var("PORT").unwrap_or("3000".into());
     let host = env::var("HOST").unwrap_or("127.0.0.1".into());
@@ -66,18 +72,33 @@ async fn main() {
 
     let state = AppState { con, pubs, tx };
 
+    // TODO: Create a etag system for html routes?
     let app = Router::new()
         .route("/", get(routes::pubs::pubs))
         .route("/admin", get(routes::admin::admin))
-        .route("/count", get(routes::count::count))
+        .nest(
+            "/count",
+            Router::new()
+                .route("/", get(routes::count::count))
+                .route("/card", get(routes::count::count_card))
+                .route("/updates/{name}", get(routes::sse::count::count))
+                .route_layer(middleware::from_fn(compress_sse)),
+        )
         .nest(
             "/pub",
             Router::new()
                 .route("/create", post(routes::admin::create_pub))
-                .route("/increase", post(routes::count::increase)),
+                .route("/increase", post(routes::count::increase))
+                .route("/set_queue", post(routes::count::set_queue)),
         )
         .route("/pub-updates", get(routes::sse::pubs::pub_updates))
-        .nest_service("/static", get_service(ServeDir::new("static")))
+        .route_layer(middleware::from_fn(compress_sse))
+        .nest_service(
+            "/static",
+            ServeDir::new("./static")
+                .precompressed_zstd()
+                .precompressed_gzip(),
+        )
         .with_state(state)
         .layer(CookieManagerLayer::new());
 

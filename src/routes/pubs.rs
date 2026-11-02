@@ -5,7 +5,7 @@ use maud::{Markup, html};
 
 use crate::{
     AppState,
-    r#pub::Pub,
+    r#pub::{Pub, Queue},
     routes::utils::{base_templates, theme_extractor::ExplicitTheme},
 };
 
@@ -24,24 +24,6 @@ pub async fn pubs(
                 // TODO: Should not be needed if oob is not used. Regular hx-swap for NewPub should work
                 // Subscribe the the 'message' event which will be used to send oob responses
                 span sse-swap="message" hx-swap="none" {}
-            }
-
-            form class="mt-5" {
-                select name="name" {
-                    @for (name, _) in pubs.iter() {
-                        option value=(name) { (name) }
-                    }
-                }
-                button.btn hx-post="/increase" hx-swap="none" {"+"}
-                button.btn hx-post="/reset" hx-swap="none" {"0"}
-            }
-
-            form class="mt-5" {
-                label { "Create pub " }
-                input class="input" placeholder="name" name="name";
-                input class="input" type="number" placeholder="capacity" name="capacity";
-                input class="input" placeholder="color" name="color";
-                button.btn hx-swap="none" hx-post="/create" { "Create" }
             }
         },
     )
@@ -87,15 +69,26 @@ pub fn pub_markup(name: &str, p: &Pub, weight: isize) -> Markup {
                     }
                 }
                 div class="flex flex-row items-center gap-2" {
-                    div class="flex flex-row items-center" {
-                        span class="text-nowrap whitespace-pre" { "Queue: Short" }
-                        span class="status-shadow m-1 rounded-4xl p-1 shadow-lg bg-success" {}
-                    }
+                    (pub_queue(name, &p))
                     div class="flex-grow-1" sse-swap=(name) {
                         (pub_progress_bar(name, &p))
                     }
                 }
             }
+        }
+    }
+}
+
+pub fn pub_queue(name: &str, p: &Pub) -> Markup {
+    html! {
+        div id={ "pub-"(name)"-queue" } class="flex flex-row items-center" {
+            span class="text-nowrap whitespace-pre" { "Queue: "(p.queue) }
+            @let bg_color = match p.queue {
+                Queue::Short => "bg-success",
+                Queue::Medium => "bg-warning",
+                Queue::Long => "bg-error",
+            };
+            span class={"status-shadow m-1 rounded-4xl p-1 shadow-lg " (bg_color)} {}
         }
     }
 }

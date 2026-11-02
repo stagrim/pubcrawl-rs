@@ -11,6 +11,8 @@
     --radius-selector: 1rem;
 }
 
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
 .rs-progress {
     @apply overflow-hidden rounded-2xl;
     background-color: color-mix(in oklab, currentColor 20%, transparent);
