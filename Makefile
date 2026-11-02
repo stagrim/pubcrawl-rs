@@ -18,6 +18,7 @@ install:
 	@echo "Remember to add ~/.cargo/bin to you path"
 	@echo ""
 
+# TODO: Check if the user has parallel during install
 compress:
 	find "./static" -type f -regex ".*\(css\|js\)$\" | parallel -j$(shell nproc) 'zstd -19fk {}'
 	find "./static" -type f -regex ".*\(css\|js\)$\" | parallel -j$(shell nproc) 'gzip -9fk {}'

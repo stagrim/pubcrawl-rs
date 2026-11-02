@@ -11,10 +11,7 @@ use strum::IntoEnumIterator;
 use crate::{
     AppState,
     r#pub::{Pub, PubChange, PubName, Queue},
-    routes::{
-        sse::count::{EVENT_CAPACITY, EVENT_COUNT, EVENT_QUEUE},
-        utils::{base_templates, theme_extractor::ExplicitTheme},
-    },
+    routes::utils::{base_templates, theme_extractor::ExplicitTheme},
 };
 
 pub async fn count(
@@ -59,7 +56,7 @@ pub async fn count_card(
 
 fn count_card_markup(name: &String, p: &Pub) -> Markup {
     html! {
-        div class="card bg-base-300 border-t-6 sm:h-128" style={"border-color:"(p.color)";"} sse-connect={"/count/updates/"(name)} {
+        div class="card bg-base-300 border-t-6 sm:h-128" style={"border-color:"(p.color)";"} hx-sse:connect={"/count/updates/"(name)} {
             div class="card-body" {
                 div class="flex flex-row justify-between" {
                     h1 class="card-title" {
@@ -68,7 +65,7 @@ fn count_card_markup(name: &String, p: &Pub) -> Markup {
                 }
 
                 div class="flex flex-col items-center sm:gap-2" {
-                    form class="flex min-h-80 flex-col gap-4 sm:h-full xl:flex-row" hx-swap="none" {
+                    form class="flex min-h-80 flex-col gap-4 sm:h-full xl:flex-row" hx-swap:inherited="none" {
                         input type="hidden" name="name" value=(name);
                         div class="join join-vertical sm:h-full" {
                             button
@@ -87,10 +84,10 @@ fn count_card_markup(name: &String, p: &Pub) -> Markup {
                         div class="stats h-full w-full bg-white shadow dark:bg-black" {
                             div class="stat text-center" {
                                 span class="stat-title sm:text-xl" {"Occupancy"}
-                                span class="stat-value text-5xl font-bold sm:text-8xl " hx-swap="innerHTML" {
-                                    span sse-swap=(EVENT_COUNT) { (p.count) }
+                                span class="stat-value text-5xl font-bold sm:text-8xl " {
+                                    span id="count-value" { (p.count) }
                                     " / "
-                                    span sse-swap=(EVENT_CAPACITY) { (p.capacity) }
+                                    span id="count-capacity" { (p.capacity) }
                                 }
                             }
                         }
@@ -99,7 +96,7 @@ fn count_card_markup(name: &String, p: &Pub) -> Markup {
                     div class="join join-vertical" {
                         span class="text-md join-item m-2 font-bold" {"Queue Status"}
                         form hx-trigger="change" hx-post="/pub/set_queue" hx-swap="none" {
-                            div class="tabs tabs-box join-item" id="count-queue" sse-swap=(EVENT_QUEUE) hx-swap="innerHTML" {
+                            div class="tabs tabs-box join-item" id="count-queue" {
                                 (queue(name, &p))
                             }
                         }

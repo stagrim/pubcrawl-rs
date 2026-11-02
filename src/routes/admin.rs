@@ -109,7 +109,7 @@ fn pub_markup(name: &String, p: &Pub) -> Markup {
                     div class="flex w-full flex-col md:flex-row gap-1" {
                         div class="flex flex-row md:flex-col gap-3 md:gap-1" {
                             button class="btn btn-secondary flex-1" {"Save"}
-                            button class="btn btn-error flex-1" hx-delete="" hx-confirm="test" {"Remove"}
+                            button class="btn btn-error flex-1" hx-delete="" hx-include="closest form" hx-confirm="test" {"Remove"}
                         }
 
                         div class="w-full divider md:divider-horizontal divider-default" {}

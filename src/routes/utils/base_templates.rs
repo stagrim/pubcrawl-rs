@@ -12,11 +12,11 @@ pub fn base(theme: Option<Theme>, content: Markup) -> Markup {
                 link rel="icon" href="static/icons/favicon-512x512.png";
                 link rel="stylesheet" href="/static/css/style.min.css";
                 script src="/static/js/htmx.min.js" {}
-                script src="https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.2" crossorigin="anonymous" {}
-                script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js" crossorigin="anonymous" {}
+                script src="/static/js/hx-see.min.js" crossorigin="anonymous" {}
+                script src="/static/js/sortable.min.js" crossorigin="anonymous" {}
                 script src="/static/js/script.js" {}
             }
-            body hx-ext="sse" class="theme-controller" {
+            body class="theme-controller" {
                 nav class="navbar dark:bg-base-300 bg-blue-800 text-white shadow-lg" {
                     div class="navbar-start" {
                         a href="/" {

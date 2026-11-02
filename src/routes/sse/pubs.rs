@@ -43,41 +43,43 @@ pub async fn pub_updates(
 
     let update_stream = BroadcastStream::new(rx)
         // TODO: Error handling
-        .then(move |change|  {
+        .then(move |change| {
             let pubs = pubs.clone();
             async move {
                 let change = change.unwrap();
                 println!("Received pubchange: {change:?}");
-                let (name, snippet) =
-                    match change {
-                        PubChange::Count(PubName(name), p) =>
-                            (name.clone(),
-                            html! {
-                                input type="hidden" name="item" value=(pub_order_weight(&p)) hx-swap-oob={"outerHTML:#pub-value-"(name)} id={"pub-value-"(name)};
-                                span hx-swap-oob=(format!("innerHTML:#{name}-count")) { (p.count) }
-                                (pub_progress_bar(&name, &p))
-                            }),
-                        PubChange::NewPub(PubName(name), p) =>
-                            ("message".into(),
-                            html! {
-                                div hx-swap-oob="beforeend:#pubs" { (pub_markup(&name, &p, 0)) }
-                            }),
-                        PubChange::Capacity(pub_name, _) => todo!(),
-                        PubChange::Color(pub_name, _) => todo!(),
-                        PubChange::Reload =>  ("reload".to_string(), html! {div id="pubs" hx-swap-oob="InnerHTML:#pubs" { (pubs_markup(pubs.read().await.iter())) }}),
-                        PubChange::Queue(PubName(name), p) => (name.clone(),
-                            html! {
-                                span hx-swap-oob={"outerHTML:#pub-"(name)"-queue"} {
-                                    (pub_queue(&name, &p))
-                                }
-                                (pub_progress_bar(&name, &p))
-                            }
-                        ),
-                    };
-                Ok(Event::default()
-                //TODO: Event must have prefix to not mess with my commands
-                    .event(name)
-                    .data(snippet.into_string()))
+                let snippet = match change {
+                    PubChange::Count(PubName(name), p) => html! {
+                        hx-partial id={"pub-value-"(name)} hx-swap="outerHTML" {
+                            input type="hidden" name="item" value=(pub_order_weight(&p)) id={"pub-value-"(name)};
+                        }
+                        hx-partial id={(name)"-count"} { (p.count) }
+                        hx-partial id={"pub-"(name)"-pb"} hx-swap="outerHTML" {
+                            (pub_progress_bar(&name, &p))
+                        }
+                    },
+                    PubChange::NewPub(PubName(name), p) => html! {
+                        hx-partial id="pubs" hx-swap="beforeend" {
+                            (pub_markup(&name, &p, 0))
+                        }
+                    },
+                    PubChange::Capacity(pub_name, _) => todo!(),
+                    PubChange::Color(pub_name, _) => todo!(),
+                    PubChange::Reload => html! {
+                        hx-partial id="pubs" {
+                            (pubs_markup(pubs.read().await.iter()))
+                        }
+                    },
+                    PubChange::Queue(PubName(name), p) => html! {
+                        hx-partial id={"pub-"(name)"-queue"} hx-swap="outerHTML" {
+                            (pub_queue(&name, &p))
+                        }
+                        hx-partial id={"pub-"(name)"-pb"} hx-swap="outerHTML" {
+                            (pub_progress_bar(&name, &p))
+                        }
+                    },
+                };
+                Ok(Event::default().data(snippet.into_string()))
             }
         });
 

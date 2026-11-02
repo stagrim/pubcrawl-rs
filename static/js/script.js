@@ -1,12 +1,12 @@
-document.addEventListener("htmx:sseBeforeMessage", (e) => {
-    console.log(e.detail.data);
+document.addEventListener("htmx:sse:before:message", (e) => {
+    console.log(e.detail.message.data);
 });
 
 let sortable;
 
-document.addEventListener("htmx:load", function () {
+document.addEventListener("htmx:after:process", function () {
     const sortableList = document.getElementById("pubs");
-    if (sortableList) {
+    if (sortableList && sortable?.el !== sortableList) {
         sortable = new Sortable(sortableList, {
             animation: 150,
             disabled: true, // Disable dragging
@@ -16,7 +16,7 @@ document.addEventListener("htmx:load", function () {
 
 let debounceTimeout;
 
-document.addEventListener("htmx:afterSettle", function () {
+document.addEventListener("htmx:after:settle", function () {
     clearTimeout(debounceTimeout);
 
     debounceTimeout = setTimeout(() => {

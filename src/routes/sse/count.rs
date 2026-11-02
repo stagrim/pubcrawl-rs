@@ -18,10 +18,6 @@ use crate::{
     routes::count::queue,
 };
 
-pub const EVENT_COUNT: &str = "count";
-pub const EVENT_CAPACITY: &str = "capacity";
-pub const EVENT_QUEUE: &str = "queue";
-
 pub async fn count(
     Path(name): Path<String>,
     State(AppState { pubs, tx, .. }): State<AppState>,
@@ -35,7 +31,9 @@ pub async fn count(
         Ok(Event::default().data(
             // TODO: Replace with entire state
             html! {
-                span id="current-count" { (pubs_state.read().await.get(&name_clone).and_then(|p| Some(p.count)).unwrap_or(0)) }
+                hx-partial id="count-value" {
+                    (pubs_state.read().await.get(&name_clone).and_then(|p| Some(p.count)).unwrap_or(0))
+                }
             }
             .into_string(),
         ))
@@ -54,20 +52,16 @@ pub async fn count(
         .then(async move |change| {
             let change = change.unwrap();
             println!("Received pubchange: {change:?}");
-            let (name, snippet) = match change {
-                PubChange::Count(_, p) => (
-                    EVENT_COUNT,
-                    html! {
-                        span {(p.count)}
-                    },
-                ),
-                PubChange::Queue(PubName(name), p) => (EVENT_QUEUE, queue(&name, &p)),
+            let snippet = match change {
+                PubChange::Count(_, p) => html! {
+                    hx-partial id="count-value" { (p.count) }
+                },
+                PubChange::Queue(PubName(name), p) => html! {
+                    hx-partial id="count-queue" { (queue(&name, &p)) }
+                },
                 _ => todo!(),
             };
-            Ok(Event::default()
-                //TODO: Event must have prefix to not mess with my commands
-                .event(name)
-                .data(snippet.into_string()))
+            Ok(Event::default().data(snippet.into_string()))
         });
 
     Sse::new(current_state.chain(update_stream)).keep_alive(KeepAlive::default())

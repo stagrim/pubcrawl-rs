@@ -18,12 +18,8 @@ pub async fn pubs(
     base_templates::base(
         theme,
         html! {
-            div id="pubs" sse-connect="/pub-updates" {
+            div id="pubs" hx-sse:connect="/pub-updates" {
                 (pubs_markup(pubs.iter()))
-
-                // TODO: Should not be needed if oob is not used. Regular hx-swap for NewPub should work
-                // Subscribe the the 'message' event which will be used to send oob responses
-                span sse-swap="message" hx-swap="none" {}
             }
         },
     )
@@ -70,7 +66,7 @@ pub fn pub_markup(name: &str, p: &Pub, weight: isize) -> Markup {
                 }
                 div class="flex flex-row items-center gap-2" {
                     (pub_queue(name, &p))
-                    div class="flex-grow-1" sse-swap=(name) {
+                    div class="flex-grow-1" {
                         (pub_progress_bar(name, &p))
                     }
                 }
