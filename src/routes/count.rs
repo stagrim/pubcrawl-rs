@@ -71,12 +71,12 @@ fn count_card_markup(name: &String, p: &Pub) -> Markup {
                             button
                                 class="join-item btn btn-xl btn-success h-40 w-60 text-5xl sm:h-1/2 sm:w-128 sm:text-6xl"
                                 hx-post="/pub/increase"
-                                hx-trigger="click, keyup[key=='ArrowUp' || key==' '] from:body"
+                                hx-trigger="click, keydown[!repeat && (key=='ArrowUp' || key=='PageUp' || key==' ')] from:body prevent"
                             {"+"}
                             button
                                 class="join-item btn btn-xl btn-error h-40 w-60 text-5xl sm:h-1/2 sm:w-128 sm:text-6xl"
                                 hx-post="/pub/increase"
-                                hx-trigger="click, keyup[key=='ArrowDown'] from:body"
+                                hx-trigger="click, keydown[!repeat && (key=='ArrowDown' || key=='PageDown')] from:body prevent"
                                 name="delta"
                                 value="-1"
                             {"-"}
@@ -127,6 +127,23 @@ pub struct IncreaseRequest {
     delta: Option<isize>,
 }
 
+const UPDATE_PUB: &str = r#"
+local delta = tonumber(ARGV[1])
+if not delta or delta ~= math.floor(delta) then
+  return redis.error_reply("delta must be an integer")
+end
+
+local current = tonumber(redis.call("HGET", KEYS[1], "count") or "0")
+
+-- A negative delta would take the count below zero: leave the hash unchanged.
+if delta < 0 and current + delta < 0 then
+  return {current, redis.call("HGETALL", KEYS[1])}
+end
+
+local new_count = redis.call("HINCRBY", KEYS[1], "count", ARGV[1])
+return {new_count, redis.call("HGETALL", KEYS[1])}
+"#;
+
 pub async fn increase(
     State(AppState { mut con, pubs, .. }): State<AppState>,
     Form(IncreaseRequest { name, delta }): Form<IncreaseRequest>,
@@ -135,11 +152,10 @@ pub async fn increase(
     let delta = delta.unwrap_or(1);
     //TODO: Error handling on not found
     let key = format!("pub:{name}");
-    let (new_count, updated_pub): (usize, Pub) = redis::pipe()
-        .atomic()
-        .hincr(&key, "count", delta)
-        .hgetall(&key)
-        .query_async(&mut con)
+    let (new_count, updated_pub): (usize, Pub) = redis::Script::new(UPDATE_PUB)
+        .key(&key)
+        .arg(delta)
+        .invoke_async(&mut con)
         .await
         .unwrap();
     pubs.entry(name.clone()).and_modify(|p| p.count = new_count);

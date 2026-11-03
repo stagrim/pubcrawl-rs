@@ -2,10 +2,10 @@ use maud::{Markup, html};
 
 use crate::routes::utils::theme_extractor::{THEME_COOKIE_NAME, Theme};
 
-pub fn base(theme: Option<Theme>, content: Markup) -> Markup {
+pub fn base(theme: Theme, content: Markup) -> Markup {
     html! {
         (maud::DOCTYPE)
-        html data-theme=[theme] {
+        html data-theme=(theme) {
             head {
                 meta charset="utf-8";
                 title { "Pubcrawl" }
@@ -55,14 +55,14 @@ pub fn base(theme: Option<Theme>, content: Markup) -> Markup {
     }
 }
 
-fn light_switch(theme: Option<Theme>) -> Markup {
+fn light_switch(theme: Theme) -> Markup {
     html! {
         label class="swap swap-rotate" {
             input
                 type="checkbox"
                 class="theme-controller"
                 checked[(match theme {
-                    Some(Theme::Dark) => true,
+                    Theme::Dark => true,
                     _ => false,
                 })]
                 hx-on:change={"

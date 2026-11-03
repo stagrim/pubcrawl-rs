@@ -80,11 +80,11 @@ pub fn pub_queue(name: &str, p: &Pub) -> Markup {
         div id={ "pub-"(name)"-queue" } class="flex flex-row items-center" {
             span class="text-nowrap whitespace-pre" { "Queue: "(p.queue) }
             @let bg_color = match p.queue {
-                Queue::Short => "bg-success",
-                Queue::Medium => "bg-warning",
-                Queue::Long => "bg-error",
+                Queue::Short => "--color-success",
+                Queue::Medium => "--color-warning",
+                Queue::Long => "--color-error",
             };
-            span class={"status-shadow m-1 rounded-4xl p-1 shadow-lg " (bg_color)} {}
+            span class="status-shadow m-1 rounded-4xl p-1 shadow-lg" style={"background-color: var("(bg_color)");"} {}
         }
     }
 }

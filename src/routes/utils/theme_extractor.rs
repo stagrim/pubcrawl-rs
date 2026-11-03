@@ -25,7 +25,7 @@ impl Display for Theme {
 
 /// Returns Some(Theme) with Theme representing the value of the cookie with `THEME_COOKIE_NAME`.
 /// Returns None if cookie was not set.
-pub struct ExplicitTheme(pub Option<Theme>);
+pub struct ExplicitTheme(pub Theme);
 
 impl<S> FromRequestParts<S> for ExplicitTheme
 where
@@ -38,11 +38,11 @@ where
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get cookies"))?
             .get(THEME_COOKIE_NAME)
-            .and_then(|cookie| match cookie.value() {
-                "dark" => Some(Theme::Dark),
-                "light" => Some(Theme::Light),
-                _ => None,
-            });
+            .map(|cookie| match cookie.value() {
+                "light" => Theme::Light,
+                _ => Theme::Dark,
+            })
+            .unwrap_or(Theme::Dark);
 
         Ok(ExplicitTheme(theme))
     }
