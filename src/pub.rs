@@ -26,10 +26,10 @@ pub enum Queue {
 // TODO: flip the logic with a enum of SpecificChange(Uuid, Pub, ChangeType), and JustFuckingReloadEverything for easier logic?
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PubChange {
-    Count(Uuid, Pub),
+    Count(Uuid, usize),
     NewPub(Uuid, Pub),
-    Queue(Uuid, Pub),
+    Queue(Uuid, Queue),
     UpdateEntirePub(Uuid, Pub),
-    Active(Uuid, Pub),
+    Active(Uuid, bool),
     Reload,
 }

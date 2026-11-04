@@ -47,8 +47,8 @@ pub async fn start_background_thread(
 
                         // Update cache
                         match update.clone() {
-                            PubChange::Count(key, updated_pub) => {
-                                pubs.entry(key).and_modify(|p| p.count = updated_pub.count);
+                            PubChange::Count(key, count) => {
+                                pubs.entry(key).and_modify(|p| p.count = count);
                             }
                             PubChange::NewPub(key, p) => {
                                 pubs.insert(key, p);
@@ -58,15 +58,14 @@ pub async fn start_background_thread(
                                 // pubs.clear();
                                 // get_pubs(&mut con, &mut pubs).await;
                             }
-                            PubChange::Queue(key, updated_pub) => {
-                                pubs.entry(key).and_modify(|p| p.queue = updated_pub.queue);
+                            PubChange::Queue(key, queue) => {
+                                pubs.entry(key).and_modify(|p| p.queue = queue);
                             }
                             PubChange::UpdateEntirePub(key, updated_pub) => {
                                 pubs.entry(key).and_modify(|p| *p = updated_pub);
                             }
-                            PubChange::Active(key, updated_pub) => {
-                                pubs.entry(key)
-                                    .and_modify(|p| p.active = updated_pub.active);
+                            PubChange::Active(key, active) => {
+                                pubs.entry(key).and_modify(|p| p.active = active);
                             }
                         }
 

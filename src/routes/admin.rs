@@ -266,21 +266,17 @@ pub struct ToggleActive {
 }
 
 pub async fn toggle_active(
-    State(AppState { mut con, pubs, .. }): State<AppState>,
+    State(AppState { mut con, .. }): State<AppState>,
     Form(ToggleActive { key, active }): Form<ToggleActive>,
 ) -> impl IntoResponse {
-    let pubs = pubs.read().await;
-    println!("{key}: {active}");
     let _: () = con
         .hset(format!("pub:{}", key), "active", active)
         .await
         .unwrap();
-    let mut updated_pub = pubs.get(&key).unwrap().clone();
-    updated_pub.active = active;
     let _: () = con
         .publish(
             "pub_updates",
-            serde_json::to_string(&PubChange::Active(key, updated_pub)).unwrap(),
+            serde_json::to_string(&PubChange::Active(key, active)).unwrap(),
         )
         .await
         .unwrap();

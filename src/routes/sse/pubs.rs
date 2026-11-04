@@ -43,13 +43,17 @@ pub async fn pub_updates(
                 let change = change.unwrap();
                 println!("Received pubchange: {change:?}");
                 let snippet = match change {
-                    PubChange::Count(key, p) => html! {
-                        hx-partial id={"pub-value-"(key)} hx-swap="outerHTML" {
-                            input type="hidden" name="item" value=(pub_order_weight(&p)) id={"pub-value-"(key)};
-                        }
-                        hx-partial id={(key)"-count"} { (p.count) }
-                        hx-partial id={"pub-"(key)"-pb"} hx-swap="outerHTML" {
-                            (pub_progress_bar(&key, &p))
+                    PubChange::Count(key, count) => {
+                        let pubs = pubs.read().await;
+                        let p = pubs.get(&key).unwrap();
+                        html! {
+                            hx-partial id={"pub-value-"(key)} hx-swap="outerHTML" {
+                                input type="hidden" name="item" value=(pub_order_weight(&p)) id={"pub-value-"(key)};
+                            }
+                            hx-partial id={(key)"-count"} { (count) }
+                            hx-partial id={"pub-"(key)"-pb"} hx-swap="outerHTML" {
+                                (pub_progress_bar(&key, count, p.capacity))
+                            }
                         }
                     },
                     PubChange::NewPub(key, p) => html! {
@@ -62,12 +66,11 @@ pub async fn pub_updates(
                             (pubs_markup(pubs.read().await.iter()))
                         }
                     },
-                    PubChange::Queue(key, p) => html! {
-                        hx-partial id={"pub-"(key)"-queue"} hx-swap="outerHTML" {
-                            (pub_queue(&key, &p))
-                        }
-                        hx-partial id={"pub-"(key)"-pb"} hx-swap="outerHTML" {
-                            (pub_progress_bar(&key, &p))
+                    PubChange::Queue(key, queue) => {
+                        html! {
+                            hx-partial id={"pub-"(key)"-queue"} hx-swap="outerHTML" {
+                                (pub_queue(&key, &queue))
+                            }
                         }
                     },
                     PubChange::UpdateEntirePub(key, p) => {
@@ -77,8 +80,11 @@ pub async fn pub_updates(
                             }
                         }
                     },
-                    PubChange::Active(key, p) => {
-                        if p.active {
+                    PubChange::Active(key, active) => {
+
+                        if active {
+                            let pubs = pubs.read().await;
+                            let p = pubs.get(&key).unwrap();
                             html! {
                                 hx-partial id="pubs" hx-swap="beforeend" {
                                     (pub_markup(&key, &p, pub_order_weight(&p)))

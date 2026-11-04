@@ -98,7 +98,7 @@ fn count_card_markup(key: &Uuid, p: &Pub) -> Markup {
                         span class="text-md join-item m-2 font-bold" {"Queue Status"}
                         form hx-trigger="change" hx-post="/pub/set_queue" hx-swap="none" {
                             div class="tabs tabs-box join-item" id="count-queue" {
-                                (queue(key, &p))
+                                (queue_markup(key, &p.queue))
                             }
                         }
                     }
@@ -108,7 +108,7 @@ fn count_card_markup(key: &Uuid, p: &Pub) -> Markup {
     }
 }
 
-pub fn queue(key: &Uuid, p: &Pub) -> Markup {
+pub fn queue_markup(key: &Uuid, queue: &Queue) -> Markup {
     html! {
         input type="hidden" value=(key) name="key";
         @for q in Queue::iter() {
@@ -117,7 +117,7 @@ pub fn queue(key: &Uuid, p: &Pub) -> Markup {
                 Queue::Medium => "--color-warning",
                 Queue::Long => "--color-error",
             };
-            input class="tab transition-colors" style={"--tab-bg:var("(bg_color)");"} type="radio" name="queue" value=(q) aria-label=(q) checked[q == p.queue];
+            input class="tab transition-colors" style={"--tab-bg:var("(bg_color)");"} type="radio" name="queue" value=(q) aria-label=(q) checked[&q == queue];
         }
     }
 }
@@ -162,7 +162,7 @@ pub async fn increase(
     let _: () = con
         .publish(
             "pub_updates",
-            serde_json::to_string(&PubChange::Count(key, updated_pub)).unwrap(),
+            serde_json::to_string(&PubChange::Count(key, updated_pub.count)).unwrap(),
         )
         .await
         .unwrap();
@@ -181,7 +181,7 @@ pub async fn set_queue(
     let mut pubs = pubs.write().await;
     let (_, updated_pub): (usize, Pub) = redis::pipe()
         .atomic()
-        .hset(&format!("pub:{key}"), "queue", queue)
+        .hset(&format!("pub:{key}"), "queue", &queue)
         .hgetall(&format!("pub:{key}"))
         .query_async(&mut con)
         .await
@@ -191,7 +191,7 @@ pub async fn set_queue(
     let _: () = con
         .publish(
             "pub_updates",
-            serde_json::to_string(&PubChange::Queue(key, updated_pub)).unwrap(),
+            serde_json::to_string(&PubChange::Queue(key, queue)).unwrap(),
         )
         .await
         .unwrap();

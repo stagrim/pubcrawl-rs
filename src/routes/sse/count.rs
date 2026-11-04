@@ -13,7 +13,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use uuid::Uuid;
 
-use crate::{AppState, r#pub::PubChange, routes::count::queue};
+use crate::{AppState, r#pub::PubChange, routes::count::queue_markup};
 
 pub async fn count(
     Path(key): Path<Uuid>,
@@ -44,26 +44,26 @@ pub async fn count(
             PubChange::Queue(k, _) => k == &key,
             PubChange::Reload => true,
             PubChange::UpdateEntirePub(k, _) => k == &key,
-            PubChange::Active(k, _) => false,
+            PubChange::Active(_, _) => false,
         })
         .then(async move |change| {
             let change = change.unwrap();
-            println!("Received pubchange: {change:?}");
+            println!("Received pub_change: {change:?}");
             let snippet = match change {
-                PubChange::Count(_, p) => html! {
-                    hx-partial id="count-value" { (p.count) }
+                PubChange::Count(_, count) => html! {
+                    hx-partial id="count-value" { (count) }
                 },
-                PubChange::Queue(key, p) => html! {
-                    hx-partial id="count-queue" { (queue(&key, &p)) }
+                PubChange::Queue(key, queue) => html! {
+                    hx-partial id="count-queue" { (queue_markup(&key, &queue)) }
                 },
                 PubChange::UpdateEntirePub(key, p) => html! {
                     hx-partial id={"count-option-"(key)} { (&p.name) }
                     hx-partial id="count-title" { (&p.name) }
                     hx-partial id="count-value" { (p.count) }
                     hx-partial id="count-capacity" { (p.capacity) }
-                    hx-partial id="count-queue" { (queue(&key, &p)) }
+                    hx-partial id="count-queue" { (queue_markup(&key, &p.queue)) }
                 },
-                PubChange::NewPub(key, _) => todo!(),
+                PubChange::NewPub(_, _) => todo!(),
                 PubChange::Reload => todo!(),
                 PubChange::Active(_, _) => unreachable!(),
             };

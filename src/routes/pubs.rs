@@ -68,9 +68,9 @@ pub fn pub_markup(key: &Uuid, p: &Pub, weight: isize) -> Markup {
                     }
                 }
                 div class="flex flex-row items-center gap-2" {
-                    (pub_queue(key, &p))
+                    (pub_queue(key, &p.queue))
                     div class="flex-grow-1" {
-                        (pub_progress_bar(key, &p))
+                        (pub_progress_bar(key, p.count, p.capacity))
                     }
                 }
             }
@@ -78,11 +78,11 @@ pub fn pub_markup(key: &Uuid, p: &Pub, weight: isize) -> Markup {
     }
 }
 
-pub fn pub_queue(key: &Uuid, p: &Pub) -> Markup {
+pub fn pub_queue(key: &Uuid, queue: &Queue) -> Markup {
     html! {
         div id={ "pub-"(key)"-queue" } class="flex flex-row items-center" {
-            span class="text-nowrap whitespace-pre" { "Queue: "(p.queue) }
-            @let bg_color = match p.queue {
+            span class="text-nowrap whitespace-pre" { "Queue: "(queue) }
+            @let bg_color = match queue {
                 Queue::Short => "--color-success",
                 Queue::Medium => "--color-warning",
                 Queue::Long => "--color-error",
@@ -92,10 +92,10 @@ pub fn pub_queue(key: &Uuid, p: &Pub) -> Markup {
     }
 }
 
-pub fn pub_progress_bar(key: &Uuid, p: &Pub) -> Markup {
+pub fn pub_progress_bar(key: &Uuid, count: usize, capacity: usize) -> Markup {
     html! {
-        div class="rs-progress h-3" id={ "pub-"(key)"-pb" } role="progressbar" aria-valuemin=(p.count) aria-valuemax=(p.capacity) aria-valuenow="0" aria-labelledby="pblabel" {
-            div id={"pub-"(key)"-pb-inner"} class="rs-progress-bar" style={"width:"((p.count as f32).div(p.capacity as f32) * 100f32)"%"} {}
+        div class="rs-progress h-3" id={ "pub-"(key)"-pb" } role="progressbar" aria-valuemin=(count) aria-valuemax=(capacity) aria-valuenow="0" aria-labelledby="pblabel" {
+            div id={"pub-"(key)"-pb-inner"} class="rs-progress-bar" style={"width:"((count as f32).div(capacity as f32) * 100f32)"%"} {}
         }
     }
 }
