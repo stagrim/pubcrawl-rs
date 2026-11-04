@@ -14,13 +14,13 @@ pub async fn pubs(
     State(state): State<AppState>,
     ExplicitTheme(theme): ExplicitTheme,
 ) -> impl IntoResponse {
-    let pubs = state.pubs.read().await;
+    let cache = state.pubs.read().await;
 
     base_templates::base(
         theme,
         html! {
-            div id="pubs" hx-sse:connect="/pub-updates" {
-                (pubs_markup(pubs.iter()))
+            div id="pubs" hx-sse:connect={"/pub-updates?v="(cache.version)} {
+                (pubs_markup(cache.map.iter()))
             }
         },
     )

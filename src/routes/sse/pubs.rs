@@ -1,7 +1,8 @@
 use std::convert::Infallible;
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
+    http::HeaderMap,
     response::{
         Sse,
         sse::{Event, KeepAlive},
@@ -9,97 +10,55 @@ use axum::{
 };
 use futures::Stream;
 use maud::html;
+use serde::Deserialize;
 use tokio::sync::broadcast::Receiver;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
-use crate::{
-    AppState,
-    r#pub::PubChange,
-    routes::pubs::{pub_markup, pub_order_weight, pub_progress_bar, pub_queue, pubs_markup},
-};
+use crate::{AppState, r#pub::PubBroadcast, routes::pubs::pubs_markup};
+
+#[derive(Deserialize, Default)]
+pub struct VersionQuery {
+    pub v: Option<u64>,
+}
 
 pub async fn pub_updates(
     State(AppState { pubs, tx, .. }): State<AppState>,
+    Query(VersionQuery { v }): Query<VersionQuery>,
+    headers: HeaderMap,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    // TODO: Include more info in the change events? Include the entire pub??
-    let rx: Receiver<PubChange> = tx.subscribe();
+    let rx: Receiver<PubBroadcast> = tx.subscribe();
 
-    let pubs_state = pubs.clone();
-    let current_state = futures::stream::once(async move {
-        // TODO: use custom event here also, and avoid using random string, and switch to constants
-        Ok(Event::default().data(
-            html! {
-                (pubs_markup(pubs_state.read().await.iter()))
-            }
-            .into_string(),
-        ))
+    let client_version = headers
+        .get("last-event-id")
+        .and_then(|val| val.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .or(v);
+
+    let (initial_event, start_version) = {
+        let cache = pubs.read().await;
+        if client_version != Some(cache.version) {
+            let evt = Event::default().id(cache.version.to_string()).data(
+                html! {
+                    hx-partial id="pubs" {
+                        (pubs_markup(cache.map.iter()))
+                    }
+                }
+                .into_string(),
+            );
+            (Some(Ok(evt)), cache.version)
+        } else {
+            (None, cache.version)
+        }
+    };
+
+    let catchup_stream = futures::stream::iter(initial_event);
+
+    let update_stream = BroadcastStream::new(rx).filter_map(move |msg| match msg {
+        Ok(broadcast) if broadcast.version > start_version => Some(Ok(Event::default()
+            .id(broadcast.version.to_string())
+            .data(broadcast.pubs_html.as_ref()))),
+        _ => None,
     });
 
-    let update_stream = BroadcastStream::new(rx)
-        // TODO: Error handling
-        .then(move |change| {
-            let pubs = pubs.clone();
-            async move {
-                let change = change.unwrap();
-                println!("Received pubchange: {change:?}");
-                let snippet = match change {
-                    PubChange::Count(key, count) => {
-                        let pubs = pubs.read().await;
-                        let p = pubs.get(&key).unwrap();
-                        html! {
-                            hx-partial id={"pub-value-"(key)} hx-swap="outerHTML" {
-                                input type="hidden" name="item" value=(pub_order_weight(&p)) id={"pub-value-"(key)};
-                            }
-                            hx-partial id={(key)"-count"} { (count) }
-                            hx-partial id={"pub-"(key)"-pb"} hx-swap="outerHTML" {
-                                (pub_progress_bar(&key, count, p.capacity))
-                            }
-                        }
-                    },
-                    PubChange::NewPub(key, p) => html! {
-                        hx-partial id="pubs" hx-swap="beforeend" {
-                            (pub_markup(&key, &p, pub_order_weight(&p)))
-                        }
-                    },
-                    PubChange::Reload => html! {
-                        hx-partial id="pubs" {
-                            (pubs_markup(pubs.read().await.iter()))
-                        }
-                    },
-                    PubChange::Queue(key, queue) => {
-                        html! {
-                            hx-partial id={"pub-"(key)"-queue"} hx-swap="outerHTML" {
-                                (pub_queue(&key, &queue))
-                            }
-                        }
-                    },
-                    PubChange::UpdateEntirePub(key, p) => {
-                        html! {
-                            hx-partial id={"pub-card-"(key)} hx-swap="outerHTML" {
-                                (pub_markup(&key, &p, pub_order_weight(&p)))
-                            }
-                        }
-                    },
-                    PubChange::Active(key, active) => {
-
-                        if active {
-                            let pubs = pubs.read().await;
-                            let p = pubs.get(&key).unwrap();
-                            html! {
-                                hx-partial id="pubs" hx-swap="beforeend" {
-                                    (pub_markup(&key, &p, pub_order_weight(&p)))
-                                }
-                            }
-                        } else {
-                            html! {
-                                hx-partial id={"pub-card-"(key)} hx-swap="delete" {}
-                            }
-                        }
-                    },
-                };
-                Ok(Event::default().data(snippet.into_string()))
-            }
-        });
-
-    Sse::new(current_state.chain(update_stream)).keep_alive(KeepAlive::default())
+    Sse::new(catchup_stream.chain(update_stream)).keep_alive(KeepAlive::default())
 }

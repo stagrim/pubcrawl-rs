@@ -8,13 +8,13 @@ pub fn base(theme: Theme, content: Markup) -> Markup {
         html data-theme=(theme) {
             head {
                 meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1";
                 title { "Pubcrawl" }
-                link rel="icon" href="static/icons/favicon-512x512.png";
-                link rel="stylesheet" href="/static/css/style.min.css";
-                script src="/static/js/htmx.min.js" {}
-                script src="/static/js/hx-see.min.js" crossorigin="anonymous" {}
-                script src="/static/js/sortable.min.js" crossorigin="anonymous" {}
-                script src="/static/js/script.js" {}
+                link rel="icon" href="/static/icons/favicon-512x512.png";
+                link rel="stylesheet" href="/static/css/style.min.css?v=1";
+                script src="/static/js/htmx.min.js?v=4.0.1" defer {}
+                script src="/static/js/hx-see.min.js?v=4.0.1" defer {}
+                script src="/static/js/script.js?v=1" defer {}
             }
             body class="theme-controller" {
                 nav class="navbar dark:bg-base-300 bg-blue-800 text-white shadow-lg" {

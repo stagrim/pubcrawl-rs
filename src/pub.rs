@@ -1,3 +1,5 @@
+use std::{collections::HashMap, sync::Arc};
+
 use redis_derive::{FromRedisValue, ToRedisArgs};
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
@@ -23,7 +25,6 @@ pub enum Queue {
     Long,
 }
 
-// TODO: flip the logic with a enum of SpecificChange(Uuid, Pub, ChangeType), and JustFuckingReloadEverything for easier logic?
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PubChange {
     Count(Uuid, usize),
@@ -32,4 +33,23 @@ pub enum PubChange {
     UpdateEntirePub(Uuid, Pub),
     Active(Uuid, bool),
     Reload,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PubEvent {
+    pub version: u64,
+    pub change: PubChange,
+}
+
+#[derive(Clone, Debug)]
+pub struct PubBroadcast {
+    pub version: u64,
+    pub change: PubChange,
+    pub pubs_html: Arc<str>,
+}
+
+#[derive(Default)]
+pub struct PubsCache {
+    pub version: u64,
+    pub map: HashMap<Uuid, Pub>,
 }

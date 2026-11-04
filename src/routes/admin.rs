@@ -1,6 +1,5 @@
 use axum::{Form, extract::State, response::IntoResponse};
 use maud::{Markup, html};
-use redis::AsyncCommands;
 use redis_derive::ToRedisArgs;
 use serde::Deserialize;
 use strum::IntoEnumIterator;
@@ -16,7 +15,7 @@ pub async fn admin(
     State(state): State<AppState>,
     ExplicitTheme(theme): ExplicitTheme,
 ) -> impl IntoResponse {
-    let pubs = state.pubs.read().await;
+    let cache = state.pubs.read().await;
 
     base_templates::base(
         theme,
@@ -52,7 +51,7 @@ pub async fn admin(
                 }
 
                 div id="admin-pubs" class="mt-4 flex flex-col gap-2" {
-                    @for (key, p) in pubs.iter() {
+                    @for (key, p) in cache.map.iter() {
                         (pub_markup(key, p))
                     }
                 }
@@ -147,7 +146,7 @@ pub struct CreatePub {
 }
 
 pub async fn create_pub(
-    State(AppState { mut con, pubs, .. }): State<AppState>,
+    State(AppState { mut con, .. }): State<AppState>,
     Form(CreatePub {
         name,
         capacity,
@@ -157,7 +156,6 @@ pub async fn create_pub(
 ) -> impl IntoResponse {
     // TODO: Add some regex check here for invalid characters, like ' :"' '
     let key = Uuid::new_v4();
-    let mut pubs = pubs.write().await;
     let new_pub = Pub {
         name,
         color,
@@ -167,19 +165,19 @@ pub async fn create_pub(
         active: true,
         count_key,
     };
-    let _ = redis::cmd("HSET")
+    let payload = serde_json::to_string(&PubChange::NewPub(key, new_pub.clone())).unwrap();
+    let _: () = redis::pipe()
+        .atomic()
+        .cmd("HSET")
         .arg(format!("pub:{key}"))
         .arg(&new_pub)
+        .ignore()
+        .cmd("EVAL")
+        .arg(crate::db::PUBLISH_EVENT_LUA)
+        .arg(0)
+        .arg(payload)
+        .ignore()
         .exec_async(&mut con)
-        .await
-        .unwrap();
-    pubs.insert(key, new_pub.clone());
-
-    let _: () = con
-        .publish(
-            "pub_updates",
-            serde_json::to_string(&PubChange::NewPub(key, new_pub.clone())).unwrap(),
-        )
         .await
         .unwrap();
 
@@ -220,7 +218,13 @@ pub async fn update_pub(
         count_key,
     }): Form<UpdatePubForm>,
 ) -> impl IntoResponse {
-    let pubs = pubs.read().await;
+    let active = pubs
+        .read()
+        .await
+        .map
+        .get(&key)
+        .map(|p| p.active)
+        .unwrap_or(true);
     let new_pub = UpdatePub {
         name,
         color,
@@ -229,25 +233,29 @@ pub async fn update_pub(
         queue,
         count_key,
     };
-    let _ = redis::cmd("HSET")
-        .arg(format!("pub:{}", key))
+    let updated_pub = Pub {
+        name: new_pub.name.clone(),
+        color: new_pub.color.clone(),
+        count,
+        capacity,
+        queue: new_pub.queue.clone(),
+        active,
+        count_key: new_pub.count_key.clone(),
+    };
+    let payload =
+        serde_json::to_string(&PubChange::UpdateEntirePub(key, updated_pub.clone())).unwrap();
+    let _: () = redis::pipe()
+        .atomic()
+        .cmd("HSET")
+        .arg(format!("pub:{key}"))
         .arg(&new_pub)
+        .ignore()
+        .cmd("EVAL")
+        .arg(crate::db::PUBLISH_EVENT_LUA)
+        .arg(0)
+        .arg(payload)
+        .ignore()
         .exec_async(&mut con)
-        .await
-        .unwrap();
-    let mut updated_pub = pubs.get(&key).unwrap().clone();
-    updated_pub.name = new_pub.name;
-    updated_pub.color = new_pub.color;
-    updated_pub.count = count;
-    updated_pub.capacity = capacity;
-    updated_pub.queue = new_pub.queue;
-    updated_pub.count_key = new_pub.count_key;
-
-    let _: () = con
-        .publish(
-            "pub_updates",
-            serde_json::to_string(&PubChange::UpdateEntirePub(key, updated_pub.clone())).unwrap(),
-        )
         .await
         .unwrap();
 
@@ -269,15 +277,18 @@ pub async fn toggle_active(
     State(AppState { mut con, .. }): State<AppState>,
     Form(ToggleActive { key, active }): Form<ToggleActive>,
 ) -> impl IntoResponse {
-    let _: () = con
-        .hset(format!("pub:{}", key), "active", active)
-        .await
-        .unwrap();
-    let _: () = con
-        .publish(
-            "pub_updates",
-            serde_json::to_string(&PubChange::Active(key, active)).unwrap(),
-        )
+    let payload = serde_json::to_string(&PubChange::Active(key, active)).unwrap();
+    let _: () = redis::pipe()
+        .atomic()
+        .hset(format!("pub:{key}"), "active", active)
+        .ignore()
+        .cmd("EVAL")
+        .arg(crate::db::PUBLISH_EVENT_LUA)
+        .arg(0)
+        .arg(payload)
+        .ignore()
+        .exec_async(&mut con)
         .await
         .unwrap();
 }
+

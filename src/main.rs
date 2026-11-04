@@ -1,8 +1,9 @@
-use std::{collections::HashMap, env, path::Path, sync::Arc};
+use std::{env, path::Path, sync::Arc};
 
 use axum::{
     Router,
     extract::Request,
+    http::{HeaderValue, header},
     middleware,
     routing::{get, post},
 };
@@ -21,13 +22,12 @@ use tokio::{
     },
 };
 use tower_cookies::CookieManagerLayer;
-use tower_http::services::ServeDir;
+use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 #[cfg(debug_assertions)]
 use tower_livereload::LiveReloadLayer;
-use uuid::Uuid;
 
 use crate::{
-    r#pub::{Pub, PubChange},
+    r#pub::{PubBroadcast, PubsCache},
     routes::utils::compress_sse::compress_sse,
 };
 
@@ -43,8 +43,8 @@ fn not_htmx_predicate<T>(req: &Request<T>) -> bool {
 #[derive(Clone)]
 struct AppState {
     con: ConnectionManager,
-    pubs: Arc<RwLock<HashMap<Uuid, Pub>>>,
-    tx: Sender<PubChange>,
+    pubs: Arc<RwLock<PubsCache>>,
+    tx: Sender<PubBroadcast>,
 }
 
 #[tokio::main]
@@ -66,12 +66,24 @@ async fn main() {
     let con = ConnectionManager::new_with_config(redis_client, config)
         .await
         .unwrap();
-    let pubs = Arc::new(RwLock::new(HashMap::new()));
-    let (tx, _) = broadcast::channel(16);
+    let pubs = Arc::new(RwLock::new(PubsCache::default()));
+    let (tx, _) = broadcast::channel(64);
 
     db::start_background_thread(con.clone(), rx, pubs.clone(), tx.clone()).await;
 
     let state = AppState { con, pubs, tx };
+
+    let static_service = tower::ServiceBuilder::new()
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        ))
+        .service(
+            ServeDir::new("./static")
+                .precompressed_br()
+                .precompressed_zstd()
+                .precompressed_gzip(),
+        );
 
     // TODO: Create a etag system for html routes?
     let app = Router::new()
@@ -96,12 +108,7 @@ async fn main() {
         )
         .route("/pub-updates", get(routes::sse::pubs::pub_updates))
         .route_layer(middleware::from_fn(compress_sse))
-        .nest_service(
-            "/static",
-            ServeDir::new("./static")
-                .precompressed_zstd()
-                .precompressed_gzip(),
-        )
+        .nest_service("/static", static_service)
         .with_state(state)
         .layer(CookieManagerLayer::new());
 

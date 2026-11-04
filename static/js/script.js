@@ -1,54 +1,59 @@
-document.addEventListener("htmx:sse:before:message", (e) => {
-    console.log(e.detail.message.data);
-});
-
-let sortable;
-
-document.addEventListener("htmx:after:process", function () {
-    const sortableList = document.getElementById("pubs");
-    if (sortableList && sortable?.el !== sortableList) {
-        sortable = new Sortable(sortableList, {
-            animation: 150,
-            disabled: true, // Disable dragging
-        });
-    }
-});
-
 let debounceTimeout;
 
+// Sort pubs after an update
 document.addEventListener("htmx:after:settle", function () {
     clearTimeout(debounceTimeout);
 
     debounceTimeout = setTimeout(() => {
-        const sortableList = document.getElementById("pubs");
-        if (!sortableList) {
+        const pubsList = document.getElementById("pubs");
+        if (!pubsList) {
             return;
         }
 
-        const cards = sortableList.querySelectorAll(".card");
+        const cards = Array.from(pubsList.querySelectorAll(".card"));
+        if (cards.length < 2) {
+            return;
+        }
 
-        // Create an array of objects linking each card's ID to its input value
-        const itemsToSort = Array.from(cards).map((card) => {
-            const id = card.dataset.id;
+        const itemsToSort = cards.map((card) => {
             const input = card.querySelector('input[type="hidden"]');
-            let value;
-            try {
-                value = parseInt(input.value);
-            } catch {
-                value = 0;
-            }
-            return { id, value };
+            const value = input ? parseInt(input.value, 10) || 0 : 0;
+            return { card, id: card.dataset.id, value };
         });
 
-        if (itemsToSort.length > 0) {
-            // Sort the array of objects based on the 'value' property
-            itemsToSort.sort((a, b) => b.value - a.value);
+        itemsToSort.sort((a, b) => b.value - a.value);
 
-            // Extract just the IDs from the sorted array into a new array
-            const newOrder = itemsToSort.map((item) => item.id);
+        const orderChanged = itemsToSort.some(
+            (item, index) => item.card !== cards[index],
+        );
+        if (!orderChanged) {
+            return;
+        }
 
-            //TODO: Only run if order changes
-            sortable.sort(newOrder, true);
+        const firstTops = new Map();
+        for (const card of cards) {
+            firstTops.set(card, card.getBoundingClientRect().top);
+        }
+
+        for (const { card } of itemsToSort) {
+            pubsList.appendChild(card);
+        }
+
+        for (const { card } of itemsToSort) {
+            const deltaY =
+                firstTops.get(card) - card.getBoundingClientRect().top;
+            if (deltaY !== 0) {
+                card.animate(
+                    [
+                        { transform: `translateY(${deltaY}px)` },
+                        { transform: "translateY(0)" },
+                    ],
+                    {
+                        duration: 150,
+                        easing: "ease",
+                    },
+                );
+            }
         }
     }, 150);
 });
