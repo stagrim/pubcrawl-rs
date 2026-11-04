@@ -28,6 +28,7 @@ pub async fn pubs(
 
 pub fn pubs_markup(pubs: Iter<Uuid, Pub>) -> Markup {
     let mut pubs = pubs
+        .filter(|(_, p)| p.active)
         .map(|(key, p)| (key, p, pub_order_weight(p)))
         .collect::<Vec<_>>();
     pubs.sort_unstable_by_key(|(_, _, weight)| -weight);

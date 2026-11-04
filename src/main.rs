@@ -90,6 +90,7 @@ async fn main() {
             Router::new()
                 .route("/create", post(routes::admin::create_pub))
                 .route("/update", post(routes::admin::update_pub))
+                .route("/active", post(routes::admin::toggle_active))
                 .route("/increase", post(routes::count::increase))
                 .route("/set_queue", post(routes::count::set_queue)),
         )

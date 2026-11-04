@@ -40,12 +40,11 @@ pub async fn count(
         // TODO: Error handling
         .filter(move |change| match change.as_ref().unwrap() {
             PubChange::Count(k, _) => k == &key,
-            PubChange::Capacity(k, _) => k == &key,
-            PubChange::Color(k, _) => k == &key,
             PubChange::NewPub(k, _) => k == &key,
             PubChange::Queue(k, _) => k == &key,
             PubChange::Reload => true,
             PubChange::UpdateEntirePub(k, _) => k == &key,
+            PubChange::Active(k, _) => false,
         })
         .then(async move |change| {
             let change = change.unwrap();
@@ -57,9 +56,6 @@ pub async fn count(
                 PubChange::Queue(key, p) => html! {
                     hx-partial id="count-queue" { (queue(&key, &p)) }
                 },
-                PubChange::Capacity(_, p) => html! {
-                    hx-partial id="count-capacity" { (p.capacity) }
-                },
                 PubChange::UpdateEntirePub(key, p) => html! {
                     hx-partial id={"count-option-"(key)} { (&p.name) }
                     hx-partial id="count-title" { (&p.name) }
@@ -67,9 +63,9 @@ pub async fn count(
                     hx-partial id="count-capacity" { (p.capacity) }
                     hx-partial id="count-queue" { (queue(&key, &p)) }
                 },
-                PubChange::Color(_key, _) => todo!(),
-                PubChange::NewPub(_key, _) => todo!(),
+                PubChange::NewPub(key, _) => todo!(),
                 PubChange::Reload => todo!(),
+                PubChange::Active(_, _) => unreachable!(),
             };
             Ok(Event::default().data(snippet.into_string()))
         });

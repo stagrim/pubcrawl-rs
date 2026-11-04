@@ -50,17 +50,11 @@ pub async fn start_background_thread(
                             PubChange::Count(key, updated_pub) => {
                                 pubs.entry(key).and_modify(|p| p.count = updated_pub.count);
                             }
-                            PubChange::Capacity(key, updated_pub) => {
-                                pubs.entry(key)
-                                    .and_modify(|p| p.capacity = updated_pub.capacity);
-                            }
-                            PubChange::Color(key, updated_pub) => {
-                                pubs.entry(key).and_modify(|p| p.color = updated_pub.color);
-                            }
                             PubChange::NewPub(key, p) => {
                                 pubs.insert(key, p);
                             }
                             PubChange::Reload => {
+                                todo!()
                                 // pubs.clear();
                                 // get_pubs(&mut con, &mut pubs).await;
                             }
@@ -69,6 +63,10 @@ pub async fn start_background_thread(
                             }
                             PubChange::UpdateEntirePub(key, updated_pub) => {
                                 pubs.entry(key).and_modify(|p| *p = updated_pub);
+                            }
+                            PubChange::Active(key, updated_pub) => {
+                                pubs.entry(key)
+                                    .and_modify(|p| p.active = updated_pub.active);
                             }
                         }
 

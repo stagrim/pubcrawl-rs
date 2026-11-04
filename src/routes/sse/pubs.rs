@@ -57,8 +57,6 @@ pub async fn pub_updates(
                             (pub_markup(&key, &p, pub_order_weight(&p)))
                         }
                     },
-                    PubChange::Capacity(_key, _) => todo!(),
-                    PubChange::Color(_key, _) => todo!(),
                     PubChange::Reload => html! {
                         hx-partial id="pubs" {
                             (pubs_markup(pubs.read().await.iter()))
@@ -76,6 +74,19 @@ pub async fn pub_updates(
                         html! {
                             hx-partial id={"pub-card-"(key)} hx-swap="outerHTML" {
                                 (pub_markup(&key, &p, pub_order_weight(&p)))
+                            }
+                        }
+                    },
+                    PubChange::Active(key, p) => {
+                        if p.active {
+                            html! {
+                                hx-partial id="pubs" hx-swap="beforeend" {
+                                    (pub_markup(&key, &p, pub_order_weight(&p)))
+                                }
+                            }
+                        } else {
+                            html! {
+                                hx-partial id={"pub-card-"(key)} hx-swap="delete" {}
                             }
                         }
                     },

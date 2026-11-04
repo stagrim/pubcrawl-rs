@@ -27,10 +27,9 @@ pub enum Queue {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PubChange {
     Count(Uuid, Pub),
-    Capacity(Uuid, Pub),
-    Color(Uuid, Pub),
     NewPub(Uuid, Pub),
     Queue(Uuid, Pub),
     UpdateEntirePub(Uuid, Pub),
+    Active(Uuid, Pub),
     Reload,
 }

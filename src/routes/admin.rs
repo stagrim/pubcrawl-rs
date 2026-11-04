@@ -64,9 +64,8 @@ pub async fn admin(
 fn pub_markup(key: &Uuid, p: &Pub) -> Markup {
     html! {
         div class="card card-sm bg-base-300 border-l-6" style={"border-color: "(p.color)} id={"pub-admin-"(key)} {
-            div class="card-body items-center md:flex-row" {
-                form class="flex w-full flex-col gap-3 md:flex-row md:gap-2" hx-post="/pub/update" {
-
+            div class="card-body flex-col md:flex-row md:items-center gap-3 md:gap-2" {
+                form class="flex flex-1 flex-col gap-3 md:flex-row md:gap-2" hx-post="/pub/update" {
                     div class="flex md:flex-col w-full gap-3" {
                         label class="floating-label w-full" {
                             span {"Name:"}
@@ -112,17 +111,26 @@ fn pub_markup(key: &Uuid, p: &Pub) -> Markup {
                         }
                     }
 
-                    div class="flex w-full flex-col md:flex-row gap-1" {
-                        div class="flex flex-row md:flex-col gap-3 md:gap-1" {
-                            button class="btn btn-secondary flex-1" {"Save"}
-                            button class="btn btn-error flex-1" hx-delete="" hx-include="closest form" hx-confirm="test" {"Remove"}
-                        }
+                    div class="flex flex-row md:flex-col gap-3 md:gap-1" {
+                        button class="btn btn-secondary flex-1" {"Save"}
+                        button class="btn btn-error flex-1" hx-delete="" hx-include="closest form" hx-confirm="test" {"Remove"}
+                    }
+                }
 
-                        div class="w-full divider md:divider-horizontal divider-default" {}
-                        label class="flex md:flex-col label mb-2 md:my-1.5 w-full justify-center" {
-                            "Active"
-                            input type="checkbox" class="toggle toggle-lg toggle-info";
-                        }
+                div class="divider md:divider-horizontal divider-default my-0" {}
+
+                form class="flex items-center justify-center" {
+                    label class="label flex md:flex-col gap-2" {
+                        "Active"
+                        input type="hidden" name="key" value=(key);
+                        input
+                            type="checkbox"
+                            name="active"
+                            value="true"
+                            checked[p.active]
+                            hx-post="/pub/active"
+                            hx-swap="none"
+                            class="toggle toggle-lg toggle-info";
                     }
                 }
             }
@@ -199,6 +207,7 @@ struct UpdatePub {
     count_key: String,
 }
 
+//TODO: make the form not update volatile fields like count and queue, and allow partial updates
 pub async fn update_pub(
     State(AppState { mut con, pubs, .. }): State<AppState>,
     Form(UpdatePubForm {
@@ -211,7 +220,7 @@ pub async fn update_pub(
         count_key,
     }): Form<UpdatePubForm>,
 ) -> impl IntoResponse {
-    let mut pubs = pubs.write().await;
+    let pubs = pubs.read().await;
     let new_pub = UpdatePub {
         name,
         color,
@@ -226,15 +235,13 @@ pub async fn update_pub(
         .exec_async(&mut con)
         .await
         .unwrap();
-    pubs.entry(key).and_modify(|p| {
-        p.name = new_pub.name;
-        p.color = new_pub.color;
-        p.count = count;
-        p.capacity = capacity;
-        p.queue = new_pub.queue;
-        p.count_key = new_pub.count_key;
-    });
-    let updated_pub = pubs.get(&key).unwrap();
+    let mut updated_pub = pubs.get(&key).unwrap().clone();
+    updated_pub.name = new_pub.name;
+    updated_pub.color = new_pub.color;
+    updated_pub.count = count;
+    updated_pub.capacity = capacity;
+    updated_pub.queue = new_pub.queue;
+    updated_pub.count_key = new_pub.count_key;
 
     let _: () = con
         .publish(
@@ -249,4 +256,32 @@ pub async fn update_pub(
             (pub_markup(&key, &updated_pub))
         }
     }
+}
+
+#[derive(Deserialize)]
+pub struct ToggleActive {
+    key: Uuid,
+    #[serde(default)]
+    active: bool,
+}
+
+pub async fn toggle_active(
+    State(AppState { mut con, pubs, .. }): State<AppState>,
+    Form(ToggleActive { key, active }): Form<ToggleActive>,
+) -> impl IntoResponse {
+    let pubs = pubs.read().await;
+    println!("{key}: {active}");
+    let _: () = con
+        .hset(format!("pub:{}", key), "active", active)
+        .await
+        .unwrap();
+    let mut updated_pub = pubs.get(&key).unwrap().clone();
+    updated_pub.active = active;
+    let _: () = con
+        .publish(
+            "pub_updates",
+            serde_json::to_string(&PubChange::Active(key, updated_pub)).unwrap(),
+        )
+        .await
+        .unwrap();
 }
