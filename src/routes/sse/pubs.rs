@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use axum::{
-    extract::{Query, State},
+    extract::State,
     response::{
         Sse,
         sse::{Event, KeepAlive},
@@ -9,20 +9,14 @@ use axum::{
 };
 use futures::Stream;
 use maud::html;
-use serde::Deserialize;
 use tokio::sync::broadcast::Receiver;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 use crate::{
     AppState,
-    r#pub::{PubChange, PubName},
+    r#pub::PubChange,
     routes::pubs::{pub_markup, pub_order_weight, pub_progress_bar, pub_queue, pubs_markup},
 };
-
-#[derive(Deserialize)]
-pub struct PubSSE {
-    name: String,
-}
 
 pub async fn pub_updates(
     State(AppState { pubs, tx, .. }): State<AppState>,
@@ -49,33 +43,40 @@ pub async fn pub_updates(
                 let change = change.unwrap();
                 println!("Received pubchange: {change:?}");
                 let snippet = match change {
-                    PubChange::Count(PubName(name), p) => html! {
-                        hx-partial id={"pub-value-"(name)} hx-swap="outerHTML" {
-                            input type="hidden" name="item" value=(pub_order_weight(&p)) id={"pub-value-"(name)};
+                    PubChange::Count(key, p) => html! {
+                        hx-partial id={"pub-value-"(key)} hx-swap="outerHTML" {
+                            input type="hidden" name="item" value=(pub_order_weight(&p)) id={"pub-value-"(key)};
                         }
-                        hx-partial id={(name)"-count"} { (p.count) }
-                        hx-partial id={"pub-"(name)"-pb"} hx-swap="outerHTML" {
-                            (pub_progress_bar(&name, &p))
+                        hx-partial id={(key)"-count"} { (p.count) }
+                        hx-partial id={"pub-"(key)"-pb"} hx-swap="outerHTML" {
+                            (pub_progress_bar(&key, &p))
                         }
                     },
-                    PubChange::NewPub(PubName(name), p) => html! {
+                    PubChange::NewPub(key, p) => html! {
                         hx-partial id="pubs" hx-swap="beforeend" {
-                            (pub_markup(&name, &p, 0))
+                            (pub_markup(&key, &p, pub_order_weight(&p)))
                         }
                     },
-                    PubChange::Capacity(pub_name, _) => todo!(),
-                    PubChange::Color(pub_name, _) => todo!(),
+                    PubChange::Capacity(_key, _) => todo!(),
+                    PubChange::Color(_key, _) => todo!(),
                     PubChange::Reload => html! {
                         hx-partial id="pubs" {
                             (pubs_markup(pubs.read().await.iter()))
                         }
                     },
-                    PubChange::Queue(PubName(name), p) => html! {
-                        hx-partial id={"pub-"(name)"-queue"} hx-swap="outerHTML" {
-                            (pub_queue(&name, &p))
+                    PubChange::Queue(key, p) => html! {
+                        hx-partial id={"pub-"(key)"-queue"} hx-swap="outerHTML" {
+                            (pub_queue(&key, &p))
                         }
-                        hx-partial id={"pub-"(name)"-pb"} hx-swap="outerHTML" {
-                            (pub_progress_bar(&name, &p))
+                        hx-partial id={"pub-"(key)"-pb"} hx-swap="outerHTML" {
+                            (pub_progress_bar(&key, &p))
+                        }
+                    },
+                    PubChange::UpdateEntirePub(key, p) => {
+                        html! {
+                            hx-partial id={"pub-card-"(key)} hx-swap="outerHTML" {
+                                (pub_markup(&key, &p, pub_order_weight(&p)))
+                            }
                         }
                     },
                 };

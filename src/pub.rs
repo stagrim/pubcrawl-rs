@@ -1,6 +1,7 @@
 use redis_derive::{FromRedisValue, ToRedisArgs};
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, FromRedisValue, ToRedisArgs, Clone)]
 pub struct Pub {
@@ -9,7 +10,8 @@ pub struct Pub {
     pub capacity: usize,
     pub queue: Queue,
     pub active: bool,
-    // pub count_key: String,
+    pub name: String,
+    pub count_key: String,
 }
 
 #[derive(
@@ -21,16 +23,14 @@ pub enum Queue {
     Long,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PubName(pub String);
-
-// TODO: flip the logic with a enum of SpecificChange(PubName, Pub, ChangeType), and JustFuckingReloadEverything for easier logic?
+// TODO: flip the logic with a enum of SpecificChange(Uuid, Pub, ChangeType), and JustFuckingReloadEverything for easier logic?
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PubChange {
-    Count(PubName, Pub),
-    Capacity(PubName, Pub),
-    Color(PubName, Pub),
-    NewPub(PubName, Pub),
-    Queue(PubName, Pub),
+    Count(Uuid, Pub),
+    Capacity(Uuid, Pub),
+    Color(Uuid, Pub),
+    NewPub(Uuid, Pub),
+    Queue(Uuid, Pub),
+    UpdateEntirePub(Uuid, Pub),
     Reload,
 }

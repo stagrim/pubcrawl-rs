@@ -24,6 +24,7 @@ use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
 #[cfg(debug_assertions)]
 use tower_livereload::LiveReloadLayer;
+use uuid::Uuid;
 
 use crate::{
     r#pub::{Pub, PubChange},
@@ -42,7 +43,7 @@ fn not_htmx_predicate<T>(req: &Request<T>) -> bool {
 #[derive(Clone)]
 struct AppState {
     con: ConnectionManager,
-    pubs: Arc<RwLock<HashMap<String, Pub>>>,
+    pubs: Arc<RwLock<HashMap<Uuid, Pub>>>,
     tx: Sender<PubChange>,
 }
 
@@ -88,6 +89,7 @@ async fn main() {
             "/pub",
             Router::new()
                 .route("/create", post(routes::admin::create_pub))
+                .route("/update", post(routes::admin::update_pub))
                 .route("/increase", post(routes::count::increase))
                 .route("/set_queue", post(routes::count::set_queue)),
         )

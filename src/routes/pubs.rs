@@ -2,6 +2,7 @@ use std::{collections::hash_map::Iter, ops::Div};
 
 use axum::{extract::State, response::IntoResponse};
 use maud::{Markup, html};
+use uuid::Uuid;
 
 use crate::{
     AppState,
@@ -25,15 +26,15 @@ pub async fn pubs(
     )
 }
 
-pub fn pubs_markup(pubs: Iter<String, Pub>) -> Markup {
+pub fn pubs_markup(pubs: Iter<Uuid, Pub>) -> Markup {
     let mut pubs = pubs
-        .map(|(name, p)| (name, p, pub_order_weight(p)))
+        .map(|(key, p)| (key, p, pub_order_weight(p)))
         .collect::<Vec<_>>();
     pubs.sort_unstable_by_key(|(_, _, weight)| -weight);
 
     html! {
-        @for (name, p, weight) in pubs {
-            (pub_markup(name, p, weight))
+        @for (key, p, weight) in pubs {
+            (pub_markup(key, p, weight))
         }
     }
 }
@@ -42,7 +43,7 @@ pub fn pub_order_weight(p: &Pub) -> isize {
     (p.count as f32 / p.capacity as f32 * 1000_000.0) as isize
 }
 
-pub fn pub_markup(name: &str, p: &Pub, weight: isize) -> Markup {
+pub fn pub_markup(key: &Uuid, p: &Pub, weight: isize) -> Markup {
     html! {
         div
             class={
@@ -50,24 +51,25 @@ pub fn pub_markup(name: &str, p: &Pub, weight: isize) -> Markup {
                 (if is_black_text(&p.color) {"text-black"} else {"text-white"})
             }
             style={"background-color:"(p.color)}
-            data-id=(name)
+            data-id=(key)
+            id={"pub-card-"(key)}
         {
-            input type="hidden" name="item" value=(weight) id={"pub-value-"(name)};
+            input type="hidden" name="item" value=(weight) id={"pub-value-"(key)};
             div class="card-body" {
                 div class="card-header flex flex-row justify-between" {
                     h2 class="card-title text-xl" {
-                        (name)
+                        (&p.name)
                     }
                     div class="flex flex-col" {
-                        p id={"pub-"(name)} class="text-2xl font-bold" {
-                            span id=(format!("{name}-count")) {(p.count)}"/"(p.capacity)
+                        p id={"pub-"(key)} class="text-2xl font-bold" {
+                            span id={(key)"-count"} {(p.count)}"/"(p.capacity)
                         }
                     }
                 }
                 div class="flex flex-row items-center gap-2" {
-                    (pub_queue(name, &p))
+                    (pub_queue(key, &p))
                     div class="flex-grow-1" {
-                        (pub_progress_bar(name, &p))
+                        (pub_progress_bar(key, &p))
                     }
                 }
             }
@@ -75,9 +77,9 @@ pub fn pub_markup(name: &str, p: &Pub, weight: isize) -> Markup {
     }
 }
 
-pub fn pub_queue(name: &str, p: &Pub) -> Markup {
+pub fn pub_queue(key: &Uuid, p: &Pub) -> Markup {
     html! {
-        div id={ "pub-"(name)"-queue" } class="flex flex-row items-center" {
+        div id={ "pub-"(key)"-queue" } class="flex flex-row items-center" {
             span class="text-nowrap whitespace-pre" { "Queue: "(p.queue) }
             @let bg_color = match p.queue {
                 Queue::Short => "--color-success",
@@ -89,10 +91,10 @@ pub fn pub_queue(name: &str, p: &Pub) -> Markup {
     }
 }
 
-pub fn pub_progress_bar(name: &str, p: &Pub) -> Markup {
+pub fn pub_progress_bar(key: &Uuid, p: &Pub) -> Markup {
     html! {
-        div class="rs-progress h-3" id={ "pub-"(name)"-pb" } role="progressbar" aria-valuemin=(p.count) aria-valuemax=(p.capacity) aria-valuenow="0" aria-labelledby="pblabel" {
-            div id={"pub-"(name)"-pb-inner"} class="rs-progress-bar" style={"width:"((p.count as f32).div(p.capacity as f32) * 100f32)"%"} {}
+        div class="rs-progress h-3" id={ "pub-"(key)"-pb" } role="progressbar" aria-valuemin=(p.count) aria-valuemax=(p.capacity) aria-valuenow="0" aria-labelledby="pblabel" {
+            div id={"pub-"(key)"-pb-inner"} class="rs-progress-bar" style={"width:"((p.count as f32).div(p.capacity as f32) * 100f32)"%"} {}
         }
     }
 }

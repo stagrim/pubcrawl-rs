@@ -7,10 +7,11 @@ use maud::{Markup, html};
 use redis::AsyncCommands;
 use serde::Deserialize;
 use strum::IntoEnumIterator;
+use uuid::Uuid;
 
 use crate::{
     AppState,
-    r#pub::{Pub, PubChange, PubName, Queue},
+    r#pub::{Pub, PubChange, Queue},
     routes::utils::{base_templates, theme_extractor::ExplicitTheme},
 };
 
@@ -25,9 +26,9 @@ pub async fn count(
     base_templates::base(
         theme,
         html! {
-            select class="select mb-5" name="name" value=(first_pub.0) hx-get="/count/card" hx-target="#count-card" hx-trigger="change" {
-                @for (name, _) in pubs.iter() {
-                    option value=(name) { (name) }
+            select class="select mb-5" name="key" value=(first_pub.0) hx-get="/count/card" hx-target="#count-card" hx-trigger="change" {
+                @for (key, p) in pubs.iter() {
+                    option id={"count-option-"(key)} value=(key) { (p.name) }
                 }
             }
 
@@ -40,33 +41,33 @@ pub async fn count(
 
 #[derive(Deserialize)]
 pub struct GetCard {
-    name: String,
+    key: Uuid,
 }
 
 #[debug_handler]
 pub async fn count_card(
-    Query(GetCard { name }): Query<GetCard>,
+    Query(GetCard { key }): Query<GetCard>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     let pubs = state.pubs.read().await;
-    let p = pubs.get(&name).unwrap();
+    let p = pubs.get(&key).unwrap();
 
-    count_card_markup(&name, p)
+    count_card_markup(&key, p)
 }
 
-fn count_card_markup(name: &String, p: &Pub) -> Markup {
+fn count_card_markup(key: &Uuid, p: &Pub) -> Markup {
     html! {
-        div class="card bg-base-300 border-t-6 sm:h-128" style={"border-color:"(p.color)";"} hx-sse:connect={"/count/updates/"(name)} {
+        div class="card bg-base-300 border-t-6 sm:h-128" style={"border-color:"(p.color)";"} hx-sse:connect={"/count/updates/"(key)} {
             div class="card-body" {
                 div class="flex flex-row justify-between" {
                     h1 class="card-title" {
-                        span class="text-xl font-bold" {(name)}
+                        span id="count-title" class="text-xl font-bold" {(p.name)}
                     }
                 }
 
                 div class="flex flex-col items-center sm:gap-2" {
                     form class="flex min-h-80 flex-col gap-4 sm:h-full xl:flex-row" hx-swap:inherited="none" {
-                        input type="hidden" name="name" value=(name);
+                        input type="hidden" name="key" value=(key);
                         div class="join join-vertical sm:h-full" {
                             button
                                 class="join-item btn btn-xl btn-success h-40 w-60 text-5xl sm:h-1/2 sm:w-128 sm:text-6xl"
@@ -97,7 +98,7 @@ fn count_card_markup(name: &String, p: &Pub) -> Markup {
                         span class="text-md join-item m-2 font-bold" {"Queue Status"}
                         form hx-trigger="change" hx-post="/pub/set_queue" hx-swap="none" {
                             div class="tabs tabs-box join-item" id="count-queue" {
-                                (queue(name, &p))
+                                (queue(key, &p))
                             }
                         }
                     }
@@ -107,9 +108,9 @@ fn count_card_markup(name: &String, p: &Pub) -> Markup {
     }
 }
 
-pub fn queue(name: &str, p: &Pub) -> Markup {
+pub fn queue(key: &Uuid, p: &Pub) -> Markup {
     html! {
-        input type="hidden" value=(name) name="name";
+        input type="hidden" value=(key) name="key";
         @for q in Queue::iter() {
             @let bg_color = match q {
                 Queue::Short => "--color-success",
@@ -123,7 +124,7 @@ pub fn queue(name: &str, p: &Pub) -> Markup {
 
 #[derive(Deserialize)]
 pub struct IncreaseRequest {
-    name: String,
+    key: Uuid,
     delta: Option<isize>,
 }
 
@@ -146,23 +147,22 @@ return {new_count, redis.call("HGETALL", KEYS[1])}
 
 pub async fn increase(
     State(AppState { mut con, pubs, .. }): State<AppState>,
-    Form(IncreaseRequest { name, delta }): Form<IncreaseRequest>,
+    Form(IncreaseRequest { key, delta }): Form<IncreaseRequest>,
 ) -> impl IntoResponse {
     let mut pubs = pubs.write().await;
     let delta = delta.unwrap_or(1);
     //TODO: Error handling on not found
-    let key = format!("pub:{name}");
     let (new_count, updated_pub): (usize, Pub) = redis::Script::new(UPDATE_PUB)
-        .key(&key)
+        .key(&format!("pub:{key}"))
         .arg(delta)
         .invoke_async(&mut con)
         .await
         .unwrap();
-    pubs.entry(name.clone()).and_modify(|p| p.count = new_count);
+    pubs.entry(key).and_modify(|p| p.count = new_count);
     let _: () = con
         .publish(
             "pub_updates",
-            serde_json::to_string(&PubChange::Count(PubName(name), updated_pub)).unwrap(),
+            serde_json::to_string(&PubChange::Count(key, updated_pub)).unwrap(),
         )
         .await
         .unwrap();
@@ -170,29 +170,28 @@ pub async fn increase(
 
 #[derive(Deserialize)]
 pub struct QueueRequest {
-    name: String,
+    key: Uuid,
     queue: Queue,
 }
 
 pub async fn set_queue(
     State(AppState { mut con, pubs, .. }): State<AppState>,
-    Form(QueueRequest { name, queue }): Form<QueueRequest>,
+    Form(QueueRequest { key, queue }): Form<QueueRequest>,
 ) -> impl IntoResponse {
     let mut pubs = pubs.write().await;
-    let key = format!("pub:{name}");
     let (_, updated_pub): (usize, Pub) = redis::pipe()
         .atomic()
-        .hset(&key, "queue", queue)
-        .hgetall(&key)
+        .hset(&format!("pub:{key}"), "queue", queue)
+        .hgetall(&format!("pub:{key}"))
         .query_async(&mut con)
         .await
         .unwrap();
-    pubs.entry(name.clone())
+    pubs.entry(key)
         .and_modify(|p| p.queue = updated_pub.queue.clone());
     let _: () = con
         .publish(
             "pub_updates",
-            serde_json::to_string(&PubChange::Queue(PubName(name), updated_pub)).unwrap(),
+            serde_json::to_string(&PubChange::Queue(key, updated_pub)).unwrap(),
         )
         .await
         .unwrap();

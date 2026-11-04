@@ -1,14 +1,15 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use redis::{AsyncCommands, PushInfo, Value, aio::ConnectionManager};
 use tokio::sync::{RwLock, RwLockWriteGuard, broadcast::Sender, mpsc::UnboundedReceiver};
+use uuid::Uuid;
 
-use crate::r#pub::{Pub, PubChange, PubName};
+use crate::r#pub::{Pub, PubChange};
 
 pub async fn start_background_thread(
     mut con: ConnectionManager,
     mut rx: UnboundedReceiver<PushInfo>,
-    pubs: Arc<RwLock<HashMap<String, Pub>>>,
+    pubs: Arc<RwLock<HashMap<Uuid, Pub>>>,
     pub_change_sender: Sender<PubChange>,
 ) {
     tokio::spawn(async move {
@@ -46,22 +47,28 @@ pub async fn start_background_thread(
 
                         // Update cache
                         match update.clone() {
-                            PubChange::Count(PubName(name), updated_pub) => {
-                                pubs.entry(name).and_modify(|p| p.count = updated_pub.count);
+                            PubChange::Count(key, updated_pub) => {
+                                pubs.entry(key).and_modify(|p| p.count = updated_pub.count);
                             }
-                            PubChange::Capacity(PubName(name), updated_pub) => {
-                                pubs.entry(name)
+                            PubChange::Capacity(key, updated_pub) => {
+                                pubs.entry(key)
                                     .and_modify(|p| p.capacity = updated_pub.capacity);
                             }
-                            PubChange::Color(PubName(name), updated_pub) => {
-                                pubs.entry(name).and_modify(|p| p.color = updated_pub.color);
+                            PubChange::Color(key, updated_pub) => {
+                                pubs.entry(key).and_modify(|p| p.color = updated_pub.color);
                             }
-                            PubChange::NewPub(PubName(name), p) => {
-                                pubs.insert(name, p);
+                            PubChange::NewPub(key, p) => {
+                                pubs.insert(key, p);
                             }
-                            PubChange::Reload => todo!(),
-                            PubChange::Queue(PubName(name), updated_pub) => {
-                                pubs.entry(name).and_modify(|p| p.queue = updated_pub.queue);
+                            PubChange::Reload => {
+                                // pubs.clear();
+                                // get_pubs(&mut con, &mut pubs).await;
+                            }
+                            PubChange::Queue(key, updated_pub) => {
+                                pubs.entry(key).and_modify(|p| p.queue = updated_pub.queue);
+                            }
+                            PubChange::UpdateEntirePub(key, updated_pub) => {
+                                pubs.entry(key).and_modify(|p| *p = updated_pub);
                             }
                         }
 
@@ -81,12 +88,12 @@ pub async fn start_background_thread(
 
 async fn get_pubs<'a>(
     con: &mut ConnectionManager,
-    pubs: &mut RwLockWriteGuard<'a, HashMap<String, Pub>>,
+    pubs: &mut RwLockWriteGuard<'a, HashMap<Uuid, Pub>>,
 ) -> Option<()> {
     let keys: Vec<String> = con.keys("pub:*").await.ok()?;
     for key in keys {
         pubs.insert(
-            key.trim_start_matches("pub:").into(),
+            Uuid::from_str(key.trim_start_matches("pub:")).unwrap(),
             con.hgetall(&key).await.unwrap(),
         );
     }

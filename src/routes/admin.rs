@@ -1,12 +1,14 @@
 use axum::{Form, extract::State, response::IntoResponse};
 use maud::{Markup, html};
 use redis::AsyncCommands;
+use redis_derive::ToRedisArgs;
 use serde::Deserialize;
 use strum::IntoEnumIterator;
+use uuid::Uuid;
 
 use crate::{
     AppState,
-    r#pub::{Pub, PubChange, PubName, Queue},
+    r#pub::{Pub, PubChange, Queue},
     routes::utils::{base_templates, theme_extractor::ExplicitTheme},
 };
 
@@ -40,14 +42,18 @@ pub async fn admin(
                                 span class="label" {"Color:"}
                                 input class="grow" type="text" pattern="^#([a-fA-F0-9]{6}|[a-fA-F0-9]{3})$" placeholder="#F280A1" name="color" required;
                             }
+                            label class="input w-full validator" {
+                                span class="label" {"Count Key:"}
+                                input class="grow" type="text" name="count_key" required;
+                            }
                             button class="btn btn-success w-full" type="submit" { "Create" }
                         }
                     }
                 }
 
                 div id="admin-pubs" class="mt-4 flex flex-col gap-2" {
-                    @for (name, p) in pubs.iter() {
-                        (pub_markup(name, p))
+                    @for (key, p) in pubs.iter() {
+                        (pub_markup(key, p))
                     }
                 }
             }
@@ -55,18 +61,18 @@ pub async fn admin(
     )
 }
 
-fn pub_markup(name: &String, p: &Pub) -> Markup {
+fn pub_markup(key: &Uuid, p: &Pub) -> Markup {
     html! {
-        div class="card card-sm bg-base-300 border-l-6" style={"border-color: "(p.color)} {
+        div class="card card-sm bg-base-300 border-l-6" style={"border-color: "(p.color)} id={"pub-admin-"(key)} {
             div class="card-body items-center md:flex-row" {
-                form class="flex w-full flex-col gap-3 md:flex-row md:gap-2" hx-post="" {
+                form class="flex w-full flex-col gap-3 md:flex-row md:gap-2" hx-post="/pub/update" {
 
                     div class="flex md:flex-col w-full gap-3" {
                         label class="floating-label w-full" {
                             span {"Name:"}
                             // TODO: Update this with the same regex as on the server
-                            input class="input validator" placeholder="Name" type="text" name="new-name" required value=(name);
-                            input type="hidden" name="name" value=(name);
+                            input class="input validator" placeholder="Name" type="text" name="name" required value=(p.name);
+                            input type="hidden" name="key" value=(key);
                         }
                         label class="floating-label w-full" {
                             span {"Color:"}
@@ -83,13 +89,13 @@ fn pub_markup(name: &String, p: &Pub) -> Markup {
                     div class="flex md:flex-col w-full gap-3" {
                         label class="floating-label w-full" {
                             span {"Count Key:"}
-                            input class="input validator" placeholder="Count Key" name="key" required;
+                            input class="input validator" placeholder="Count Key" name="count_key" required value=(p.count_key);
                         }
                         label class="floating-label w-full" {
                             span class="label" { "Queue" }
                             select class="select validator" placeholder="Queue length" name="queue" {
                                 @for q in Queue::iter() {
-                                    option value=(q) {(q)}
+                                    option value=(q) selected[q == p.queue] {(q)}
                                 }
                             }
                         }
@@ -98,11 +104,11 @@ fn pub_markup(name: &String, p: &Pub) -> Markup {
                     div class="flex md:flex-col w-full gap-3" {
                         label class="floating-label w-full" {
                             span {"Counted:"}
-                            input class="input validator" placeholder="Counted" pattern="^[1-9]\\d*$" name="name" required value=(p.count);
+                            input class="input validator" placeholder="Counted" pattern="^\\d+$" name="count" required value=(p.count);
                         }
                         label class="floating-label w-full" {
                             span {"Capacity:"}
-                            input class="input validator" placeholder="Capacity" pattern="^[1-9]\\d*$" name="name" required value=(p.capacity);
+                            input class="input validator" placeholder="Capacity" pattern="^[1-9]\\d*$" name="capacity" required value=(p.capacity);
                         }
                     }
 
@@ -129,6 +135,7 @@ pub struct CreatePub {
     name: String,
     capacity: usize,
     color: String,
+    count_key: String,
 }
 
 pub async fn create_pub(
@@ -137,33 +144,109 @@ pub async fn create_pub(
         name,
         capacity,
         color,
+        count_key,
     }): Form<CreatePub>,
 ) -> impl IntoResponse {
     // TODO: Add some regex check here for invalid characters, like ' :"' '
+    let key = Uuid::new_v4();
     let mut pubs = pubs.write().await;
     let new_pub = Pub {
+        name,
         color,
         count: 0,
         capacity,
         queue: Queue::Short,
-        active: false,
+        active: true,
+        count_key,
     };
     let _ = redis::cmd("HSET")
-        .arg(format!("pub:{name}"))
+        .arg(format!("pub:{key}"))
         .arg(&new_pub)
         .exec_async(&mut con)
         .await
         .unwrap();
-    pubs.insert(name.clone(), new_pub.clone());
+    pubs.insert(key, new_pub.clone());
 
     let _: () = con
         .publish(
             "pub_updates",
-            serde_json::to_string(&PubChange::NewPub(PubName(name.clone()), new_pub.clone()))
-                .unwrap(),
+            serde_json::to_string(&PubChange::NewPub(key, new_pub.clone())).unwrap(),
         )
         .await
         .unwrap();
 
-    pub_markup(&name, &new_pub)
+    pub_markup(&key, &new_pub)
+}
+
+#[derive(Deserialize)]
+pub struct UpdatePubForm {
+    key: Uuid,
+    name: String,
+    capacity: usize,
+    color: String,
+    queue: Queue,
+    count: usize,
+    count_key: String,
+}
+
+#[derive(ToRedisArgs)]
+struct UpdatePub {
+    name: String,
+    capacity: usize,
+    color: String,
+    queue: Queue,
+    count: usize,
+    count_key: String,
+}
+
+pub async fn update_pub(
+    State(AppState { mut con, pubs, .. }): State<AppState>,
+    Form(UpdatePubForm {
+        key,
+        name,
+        capacity,
+        color,
+        queue,
+        count,
+        count_key,
+    }): Form<UpdatePubForm>,
+) -> impl IntoResponse {
+    let mut pubs = pubs.write().await;
+    let new_pub = UpdatePub {
+        name,
+        color,
+        count,
+        capacity,
+        queue,
+        count_key,
+    };
+    let _ = redis::cmd("HSET")
+        .arg(format!("pub:{}", key))
+        .arg(&new_pub)
+        .exec_async(&mut con)
+        .await
+        .unwrap();
+    pubs.entry(key).and_modify(|p| {
+        p.name = new_pub.name;
+        p.color = new_pub.color;
+        p.count = count;
+        p.capacity = capacity;
+        p.queue = new_pub.queue;
+        p.count_key = new_pub.count_key;
+    });
+    let updated_pub = pubs.get(&key).unwrap();
+
+    let _: () = con
+        .publish(
+            "pub_updates",
+            serde_json::to_string(&PubChange::UpdateEntirePub(key, updated_pub.clone())).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    html! {
+        hx-partial id={"pub-admin-"(key)} hx-swap="outerHTML" {
+            (pub_markup(&key, &updated_pub))
+        }
+    }
 }
