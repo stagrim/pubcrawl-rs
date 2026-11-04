@@ -4,4 +4,5 @@ dev/redis-data
 static/css/style.min.css
 *.zst
 *.gz
+*.br
 .env

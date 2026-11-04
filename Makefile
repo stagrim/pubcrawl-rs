@@ -22,3 +22,4 @@ install:
 compress:
 	find "./static" -type f -regex ".*\(css\|js\)$\" | parallel -j$(shell nproc) 'zstd -19fk {}'
 	find "./static" -type f -regex ".*\(css\|js\)$\" | parallel -j$(shell nproc) 'gzip -9fk {}'
+	find "./static" -type f -regex ".*\(css\|js\)$\" | parallel -j$(shell nproc) 'brotli -9fk {}'
