@@ -10,7 +10,7 @@ pub fn base(theme: Theme, content: Markup) -> Markup {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { "Pubcrawl" }
-                link rel="icon" href="/static/icons/favicon-512x512.png";
+                link rel="icon" href="/static/icons/favicon.png";
                 link rel="stylesheet" href="/static/css/style.min.css?v=1";
                 script src="/static/js/htmx.min.js?v=4.0.1" defer {}
                 script src="/static/js/hx-see.min.js?v=4.0.1" defer {}
@@ -20,8 +20,7 @@ pub fn base(theme: Theme, content: Markup) -> Markup {
                 nav class="navbar dark:bg-base-300 bg-blue-800 text-white shadow-lg" {
                     div class="navbar-start" {
                         a href="/" {
-                            img class="dark:hidden hidden!" src="/static/icons/favicon-512x512.png" alt="Pubcrawl logo" width="54" {}
-                            img class="block" src="/static/icons/favicon-white-512x512.png" alt="Pubcrawl logo" width="54" {}
+                            img src="/static/icons/logo-white.webp" alt="Pubcrawl logo" width="54" {}
                         }
                         a class="btn btn-ghost text-2xl font-bold" href="/" { "Pubcrawl" }
                     }
