@@ -14,7 +14,7 @@ use serde::Deserialize;
 use tokio::sync::broadcast::Receiver;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
-use crate::{AppState, r#pub::PubBroadcast, routes::pubs::pubs_markup};
+use crate::{AppState, r#pub::PubBroadcast};
 
 #[derive(Deserialize, Default)]
 pub struct VersionQuery {
@@ -40,7 +40,7 @@ pub async fn pub_updates(
             let evt = Event::default().id(cache.version.to_string()).data(
                 html! {
                     hx-partial id="pubs" {
-                        (pubs_markup(cache.map.iter()))
+                        (maud::PreEscaped(cache.rendered_pubs.as_ref()))
                     }
                 }
                 .into_string(),

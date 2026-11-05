@@ -14,13 +14,16 @@ pub async fn pubs(
     State(state): State<AppState>,
     ExplicitTheme(theme): ExplicitTheme,
 ) -> impl IntoResponse {
-    let cache = state.pubs.read().await;
+    let (version, rendered_pubs) = {
+        let cache = state.pubs.read().await;
+        (cache.version, cache.rendered_pubs.clone())
+    };
 
     base_templates::base(
         theme,
         html! {
-            div id="pubs" hx-sse:connect={"/pub-updates?v="(cache.version)} {
-                (pubs_markup(cache.map.iter()))
+            div id="pubs" hx-sse:connect={"/pub-updates?v="(version)} {
+                (maud::PreEscaped(rendered_pubs.as_ref()))
             }
         },
     )
@@ -48,7 +51,7 @@ pub fn pub_markup(key: &Uuid, p: &Pub, weight: isize) -> Markup {
     html! {
         div
             class={
-                "card dark:bg-opacity-100 bg-opacity-80 m-1 border-l-6 shadow backdrop-blur-2xl border-[color-mix(in_oklab,currentColor_15%,transparent)] "
+                "card m-1 border-l-6 shadow border-[color-mix(in_oklab,currentColor_15%,transparent)] "
                 (if is_black_text(&p.color) {"text-black"} else {"text-white"})
             }
             style={"background-color:"(p.color)}
@@ -100,30 +103,21 @@ pub fn pub_progress_bar(key: &Uuid, count: usize, capacity: usize) -> Markup {
     }
 }
 
-// TODO: Better error handling with options instead
 fn is_black_text(color: &str) -> bool {
-    let hex_part = &color[1..];
-
-    let full_hex = if hex_part.len() == 3 {
-        let mut expanded = String::with_capacity(6);
-        for c in hex_part.chars() {
-            expanded.push(c);
-            expanded.push(c);
-        }
-        expanded
-    } else if hex_part.len() == 6 {
-        hex_part.to_string()
-    } else {
-        panic!("Invalid length");
+    let hex = color.strip_prefix('#').unwrap_or(color);
+    let (r, g, b) = match hex.len() {
+        3 => (
+            u32::from_str_radix(&hex[0..1], 16).unwrap_or(0) * 17,
+            u32::from_str_radix(&hex[1..2], 16).unwrap_or(0) * 17,
+            u32::from_str_radix(&hex[2..3], 16).unwrap_or(0) * 17,
+        ),
+        6 => (
+            u32::from_str_radix(&hex[0..2], 16).unwrap_or(0),
+            u32::from_str_radix(&hex[2..4], 16).unwrap_or(0),
+            u32::from_str_radix(&hex[4..6], 16).unwrap_or(0),
+        ),
+        _ => return false,
     };
 
-    let red_str = &full_hex[0..2];
-    let green_str = &full_hex[2..4];
-    let blue_str = &full_hex[4..6];
-
-    let red = usize::from_str_radix(red_str, 16).unwrap();
-    let green = usize::from_str_radix(green_str, 16).unwrap();
-    let blue = usize::from_str_radix(blue_str, 16).unwrap();
-
-    ((red * 299 + green * 587 + blue * 114) / 1000) > 125
+    (r * 299 + g * 587 + b * 114) > 125_000
 }

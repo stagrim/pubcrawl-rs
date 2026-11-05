@@ -25,9 +25,11 @@ pub async fn start_background_thread(
 ) {
     con.subscribe(&["pub_updates"]).await.unwrap();
     if let Some((version, loaded)) = fetch_all_pubs(&mut con).await {
+        let rendered_pubs: Arc<str> = pubs_markup(loaded.iter()).into_string().into();
         let mut cache = pubs.write().await;
         cache.map = loaded;
         cache.version = version;
+        cache.rendered_pubs = rendered_pubs;
     }
 
     tokio::spawn(async move {
@@ -38,22 +40,29 @@ pub async fn start_background_thread(
 
             if push_info.kind == redis::PushKind::Disconnection {
                 println!("Disconnected, trying to reconnect");
-                pubs.write().await.map.clear();
+                {
+                    let mut cache = pubs.write().await;
+                    cache.map.clear();
+                    cache.rendered_pubs = Arc::from("");
+                }
 
                 loop {
                     if let Some((version, loaded)) = fetch_all_pubs(&mut con).await {
-                        let pubs_html: Arc<str> = {
+                        let rendered_pubs: Arc<str> =
+                            pubs_markup(loaded.iter()).into_string().into();
+                        let pubs_html: Arc<str> = html! {
+                            hx-partial id="pubs" {
+                                (maud::PreEscaped(rendered_pubs.as_ref()))
+                            }
+                        }
+                        .into_string()
+                        .into();
+                        {
                             let mut cache = pubs.write().await;
                             cache.map = loaded;
                             cache.version = version;
-                            html! {
-                                hx-partial id="pubs" {
-                                    (pubs_markup(cache.map.iter()))
-                                }
-                            }
-                            .into_string()
-                            .into()
-                        };
+                            cache.rendered_pubs = rendered_pubs;
+                        }
                         let _ = pub_change_sender.send(PubBroadcast {
                             version,
                             change: PubChange::Reload,
@@ -74,8 +83,14 @@ pub async fn start_background_thread(
                         version,
                         change: update,
                     }) => {
-                        // Check if this replica missed any intermediate messages (e.g. version gap)
                         let current_version = pubs.read().await.version;
+                        if current_version != 0
+                            && version <= current_version
+                            && !matches!(update, PubChange::Reload)
+                        {
+                            continue;
+                        }
+                        // Check if this replica missed any intermediate messages (e.g. version gap)
                         let missed_messages = current_version != 0 && version > current_version + 1;
 
                         let (final_version, final_change, pubs_html): (u64, PubChange, Arc<str>) =
@@ -83,16 +98,19 @@ pub async fn start_background_thread(
                                 if let Some((loaded_version, loaded)) =
                                     fetch_all_pubs(&mut con).await
                                 {
-                                    let mut cache = pubs.write().await;
-                                    cache.map = loaded;
-                                    cache.version = loaded_version;
-                                    let html_str = html! {
+                                    let rendered_pubs: Arc<str> =
+                                        pubs_markup(loaded.iter()).into_string().into();
+                                    let html_str: Arc<str> = html! {
                                         hx-partial id="pubs" {
-                                            (pubs_markup(cache.map.iter()))
+                                            (maud::PreEscaped(rendered_pubs.as_ref()))
                                         }
                                     }
                                     .into_string()
                                     .into();
+                                    let mut cache = pubs.write().await;
+                                    cache.map = loaded;
+                                    cache.version = loaded_version;
+                                    cache.rendered_pubs = rendered_pubs;
                                     (loaded_version, PubChange::Reload, html_str)
                                 } else {
                                     continue;
@@ -178,6 +196,8 @@ pub async fn start_background_thread(
                                     }
                                     PubChange::Reload => unreachable!(),
                                 };
+                                cache.rendered_pubs =
+                                    pubs_markup(cache.map.iter()).into_string().into();
                                 cache.version = version;
                                 (version, update, snippet)
                             };

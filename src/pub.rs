@@ -48,8 +48,18 @@ pub struct PubBroadcast {
     pub pubs_html: Arc<str>,
 }
 
-#[derive(Default)]
 pub struct PubsCache {
     pub version: u64,
     pub map: HashMap<Uuid, Pub>,
+    pub rendered_pubs: Arc<str>,
+}
+
+impl Default for PubsCache {
+    fn default() -> Self {
+        Self {
+            version: 0,
+            map: HashMap::new(),
+            rendered_pubs: Arc::from(""),
+        }
+    }
 }

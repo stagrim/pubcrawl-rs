@@ -1,14 +1,13 @@
-use std::{env, path::Path, sync::Arc};
+use std::{env, sync::Arc};
 
 use axum::{
     Router,
-    extract::Request,
     http::{HeaderValue, header},
-    middleware,
     routing::{get, post},
 };
 use dotenvy::dotenv;
 use listenfd::ListenFd;
+#[cfg(debug_assertions)]
 use notify::Watcher;
 use redis::{
     Client,
@@ -22,21 +21,20 @@ use tokio::{
     },
 };
 use tower_cookies::CookieManagerLayer;
-use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
+use tower_http::{
+    compression::CompressionLayer, services::ServeDir, set_header::SetResponseHeaderLayer,
+};
 #[cfg(debug_assertions)]
 use tower_livereload::LiveReloadLayer;
 
-use crate::{
-    r#pub::{PubBroadcast, PubsCache},
-    routes::utils::compress_sse::compress_sse,
-};
+use crate::r#pub::{PubBroadcast, PubsCache};
 
 mod db;
 mod r#pub;
 mod routes;
 
 #[cfg(debug_assertions)]
-fn not_htmx_predicate<T>(req: &Request<T>) -> bool {
+fn not_htmx_predicate<T>(req: &axum::extract::Request<T>) -> bool {
     !req.headers().contains_key("hx-request")
 }
 
@@ -85,18 +83,17 @@ async fn main() {
                 .precompressed_gzip(),
         );
 
-    // TODO: Create a etag system for html routes?
-    let app = Router::new()
+    let html_routes = Router::new()
         .route("/", get(routes::pubs::pubs))
         .route("/admin", get(routes::admin::admin))
-        .nest(
-            "/count",
-            Router::new()
-                .route("/", get(routes::count::count))
-                .route("/card", get(routes::count::count_card))
-                .route("/updates/{name}", get(routes::sse::count::count))
-                .route_layer(middleware::from_fn(compress_sse)),
-        )
+        .route("/count", get(routes::count::count))
+        .route("/count/card", get(routes::count::count_card))
+        .route_layer(CompressionLayer::new());
+
+    // TODO: Create a etag system for html routes?
+    let app = Router::new()
+        .merge(html_routes)
+        .route("/count/updates/{name}", get(routes::sse::count::count))
         .nest(
             "/pub",
             Router::new()
@@ -107,7 +104,6 @@ async fn main() {
                 .route("/set_queue", post(routes::count::set_queue)),
         )
         .route("/pub-updates", get(routes::sse::pubs::pub_updates))
-        .route_layer(middleware::from_fn(compress_sse))
         .nest_service("/static", static_service)
         .with_state(state)
         .layer(CookieManagerLayer::new());
@@ -134,7 +130,10 @@ async fn main() {
     {
         let mut watcher = notify::recommended_watcher(move |_| reloader.reload()).unwrap();
         watcher
-            .watch(Path::new("static/css"), notify::RecursiveMode::NonRecursive)
+            .watch(
+                std::path::Path::new("static/css"),
+                notify::RecursiveMode::NonRecursive,
+            )
             .unwrap();
     }
 
