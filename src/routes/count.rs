@@ -105,12 +105,12 @@ pub struct LoginRequest {
     count_key: String,
 }
 
-const CHECK_BANNED_LUA: &str = r#"
+pub(crate) const CHECK_BANNED_LUA: &str = r#"
 local attempts = tonumber(redis.call("GET", KEYS[1]) or "0")
 return attempts
 "#;
 
-const RECORD_FAIL_LUA: &str = r#"
+pub(crate) const RECORD_FAIL_LUA: &str = r#"
 local attempts = redis.call("INCR", KEYS[1])
 if attempts == 1 then
     redis.call("EXPIRE", KEYS[1], 300)
@@ -118,7 +118,7 @@ end
 return attempts
 "#;
 
-fn client_ip(headers: &HeaderMap, ConnectInfo(addr): ConnectInfo<SocketAddr>) -> String {
+pub(crate) fn client_ip(headers: &HeaderMap, ConnectInfo(addr): ConnectInfo<SocketAddr>) -> String {
     headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())

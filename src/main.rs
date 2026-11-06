@@ -27,6 +27,7 @@ use tower_http::services::ServeDir;
 use tower_http::{compression::CompressionLayer, set_header::SetResponseHeaderLayer};
 #[cfg(debug_assertions)]
 use tower_livereload::LiveReloadLayer;
+use uuid::Uuid;
 
 use crate::r#pub::{PubBroadcast, PubsCache};
 
@@ -44,6 +45,7 @@ struct AppState {
     con: ConnectionManager,
     pubs: Arc<RwLock<PubsCache>>,
     tx: Sender<PubBroadcast>,
+    admin_key: Uuid,
 }
 
 #[tokio::main]
@@ -52,6 +54,21 @@ async fn main() {
 
     let port = env::var("PORT").unwrap_or("3000".into());
     let host = env::var("HOST").unwrap_or("127.0.0.1".into());
+    let admin_key = env::var("ADMIN_PASSWORD")
+        .or_else(|_| env::var("ADMIN_KEY"))
+        .map(|s| {
+            Uuid::parse_str(s.trim()).expect("ADMIN_PASSWORD / ADMIN_KEY must be a valid UUID")
+        })
+        .unwrap_or_else(|_| {
+            #[cfg(debug_assertions)]
+            {
+                let key = Uuid::new_v4();
+                println!("ADMIN_PASSWORD not set, generated debug admin key: {key}");
+                key
+            }
+            #[cfg(not(debug_assertions))]
+            panic!("ADMIN_PASSWORD environment variable must be set to a valid UUID");
+        });
 
     println!("Connecting to db on redis://127.0.0.1:6388/?protocol=resp3");
     let redis_client = Client::open("redis://127.0.0.1:6388/?protocol=resp3").unwrap();
@@ -70,7 +87,12 @@ async fn main() {
 
     db::start_background_thread(con.clone(), rx, pubs.clone(), tx.clone()).await;
 
-    let state = AppState { con, pubs, tx };
+    let state = AppState {
+        con,
+        pubs,
+        tx,
+        admin_key,
+    };
 
     #[cfg(not(debug_assertions))]
     let static_service = tower::ServiceBuilder::new()
@@ -96,6 +118,8 @@ async fn main() {
     // TODO: Create a etag system for html routes?
     let app = Router::new()
         .merge(html_routes)
+        .route("/admin/login", post(routes::admin::login))
+        .route("/admin/logout", post(routes::admin::logout))
         .route("/count/login", post(routes::count::login))
         .route("/count/logout", post(routes::count::logout))
         .route("/count/updates", get(routes::sse::count::count))

@@ -1,63 +1,196 @@
-use axum::{Form, extract::State, response::IntoResponse};
+use std::{collections::HashMap, net::SocketAddr};
+
+use axum::{
+    Form,
+    extract::{ConnectInfo, FromRequestParts, State},
+    http::{HeaderMap, StatusCode, request::Parts},
+    response::IntoResponse,
+};
 use maud::{Markup, html};
 use redis_derive::ToRedisArgs;
 use serde::Deserialize;
 use strum::IntoEnumIterator;
+use tower_cookies::{Cookie, Cookies, cookie::SameSite};
 use uuid::Uuid;
 
 use crate::{
     AppState,
     r#pub::{Pub, PubChange, Queue},
-    routes::utils::{base_templates, theme_extractor::ExplicitTheme},
+    routes::{
+        count::{CHECK_BANNED_LUA, RECORD_FAIL_LUA, client_ip},
+        utils::{base_templates, theme_extractor::ExplicitTheme},
+    },
 };
+
+pub const ADMIN_COOKIE_NAME: &str = "admin_auth";
+
+pub struct AuthenticatedAdmin;
+
+fn verify_admin_cookie(cookies: &Cookies, state: &AppState) -> bool {
+    cookies
+        .get(ADMIN_COOKIE_NAME)
+        .and_then(|c| Uuid::parse_str(c.value()).ok())
+        .is_some_and(|key| key == state.admin_key)
+}
+
+impl FromRequestParts<AppState> for AuthenticatedAdmin {
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let cookies = Cookies::from_request_parts(parts, state)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get cookies"))?;
+
+        if verify_admin_cookie(&cookies, state) {
+            Ok(AuthenticatedAdmin)
+        } else {
+            Err((StatusCode::UNAUTHORIZED, "Unauthorized"))
+        }
+    }
+}
 
 pub async fn admin(
     State(state): State<AppState>,
+    cookies: Cookies,
     ExplicitTheme(theme): ExplicitTheme,
 ) -> impl IntoResponse {
-    let cache = state.pubs.read().await;
+    let content = if verify_admin_cookie(&cookies, &state) {
+        let cache = state.pubs.read().await;
+        admin_content_markup(&cache.map)
+    } else {
+        login_markup(None)
+    };
 
     base_templates::base(
         theme,
         html! {
-            div class="bg-base-100 border-base-300 p-6" {
-                p { """
-                This is where pubs are created. Only pubs marked as Active are shown on the front-facing main page.
-            """ }
-                div class="card bg-base-300 w-full" {
-                    div class="card-body" {
-                        h2 class="card-title" {"Create pub"}
-                        form class="flex flex-col gap-1" hx-post="/pub/create" hx-target="#admin-pubs" hx-swap="beforeend" {
-                            label class="input w-full validator" {
-                                span class="label" {"Name:"}
-                                // TODO: Update this with the same regex as on the server
-                                input class="grow" type="text" name="name" required;
-                            }
-                            label class="input w-full validator" {
-                                span class="label" {"Capacity:"}
-                                input class="grow" type="text" pattern="^[1-9]\\d*$" name="capacity" required;
-                            }
-                            label class="input w-full validator" {
-                                span class="label" {"Color:"}
-                                input class="grow" type="text" pattern="^#([a-fA-F0-9]{6}|[a-fA-F0-9]{3})$" placeholder="#F280A1" name="color" required;
-                            }
-                            label class="input w-full validator" {
-                                span class="label" {"Count Key:"}
-                                input class="grow" type="text" name="count_key" required;
-                            }
-                            button class="btn btn-success w-full" type="submit" { "Create" }
-                        }
-                    }
-                }
-
-                div id="admin-pubs" class="mt-4 flex flex-col gap-2" {
-                    @for (key, p) in cache.map.iter() {
-                        (pub_markup(key, p))
-                    }
-                }
+            div id="admin-container" {
+                (content)
             }
         },
     )
+}
+
+fn login_markup(error: Option<&str>) -> Markup {
+    html! {
+        div class="card bg-base-300 w-full max-w-md mx-auto" {
+            div class="card-body" {
+                h2 class="card-title" { "Admin Login" }
+                @if let Some(err) = error {
+                    div class="alert alert-error" { (err) }
+                }
+                form class="flex flex-col gap-2" hx-post="/admin/login" hx-target="#admin-container" {
+                    label class="input w-full" {
+                        span class="label" { "Password:" }
+                        input class="grow" type="password" name="password" required autofocus;
+                    }
+                    button class="btn btn-primary w-full" type="submit" { "Login" }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct LoginRequest {
+    password: String,
+}
+
+pub async fn login(
+    State(mut state): State<AppState>,
+    cookies: Cookies,
+    headers: HeaderMap,
+    addr: ConnectInfo<SocketAddr>,
+    Form(LoginRequest { password }): Form<LoginRequest>,
+) -> impl IntoResponse {
+    let ip = client_ip(&headers, addr);
+    let ban_key = format!("login_attempts:{ip}");
+
+    let attempts: usize = redis::Script::new(CHECK_BANNED_LUA)
+        .key(&ban_key)
+        .invoke_async(&mut state.con)
+        .await
+        .unwrap_or(0);
+
+    if attempts >= 5 {
+        return login_markup(Some("Too many failed attempts. Try again in 5 minutes."));
+    }
+
+    if Uuid::parse_str(password.trim()).is_ok_and(|key| key == state.admin_key) {
+        let mut cookie = Cookie::new(ADMIN_COOKIE_NAME, state.admin_key.to_string());
+        cookie.set_path("/");
+        cookie.set_http_only(true);
+        cookie.set_same_site(SameSite::Lax);
+        cookies.add(cookie);
+
+        let cache = state.pubs.read().await;
+        admin_content_markup(&cache.map)
+    } else {
+        let _: usize = redis::Script::new(RECORD_FAIL_LUA)
+            .key(&ban_key)
+            .invoke_async(&mut state.con)
+            .await
+            .unwrap_or(0);
+
+        login_markup(Some("Invalid admin password"))
+    }
+}
+
+pub async fn logout(cookies: Cookies) -> impl IntoResponse {
+    let mut cookie = Cookie::new(ADMIN_COOKIE_NAME, "");
+    cookie.set_path("/");
+    cookies.remove(cookie);
+
+    login_markup(None)
+}
+
+fn admin_content_markup(pubs: &HashMap<Uuid, Pub>) -> Markup {
+    html! {
+        div class="bg-base-100 border-base-300 p-6" {
+            div class="flex flex-row justify-between items-center mb-2" {
+                p { """
+                This is where pubs are created. Only pubs marked as Active are shown on the front-facing main page.
+                """ }
+                button class="btn btn-sm btn-error" hx-post="/admin/logout" hx-target="#admin-container" {
+                    "Logout"
+                }
+            }
+            div class="card bg-base-300 w-full" {
+                div class="card-body" {
+                    h2 class="card-title" {"Create pub"}
+                    form class="flex flex-col gap-1" hx-post="/pub/create" hx-target="#admin-pubs" hx-swap="beforeend" {
+                        label class="input w-full validator" {
+                            span class="label" {"Name:"}
+                            // TODO: Update this with the same regex as on the server
+                            input class="grow" type="text" name="name" required;
+                        }
+                        label class="input w-full validator" {
+                            span class="label" {"Capacity:"}
+                            input class="grow" type="text" pattern="^[1-9]\\d*$" name="capacity" required;
+                        }
+                        label class="input w-full validator" {
+                            span class="label" {"Color:"}
+                            input class="grow" type="text" pattern="^#([a-fA-F0-9]{6}|[a-fA-F0-9]{3})$" placeholder="#F280A1" name="color" required;
+                        }
+                        label class="input w-full validator" {
+                            span class="label" {"Count Key:"}
+                            input class="grow" type="text" name="count_key" required;
+                        }
+                        button class="btn btn-success w-full" type="submit" { "Create" }
+                    }
+                }
+            }
+
+            div id="admin-pubs" class="mt-4 flex flex-col gap-2" {
+                @for (key, p) in pubs.iter() {
+                    (pub_markup(key, p))
+                }
+            }
+        }
+    }
 }
 
 fn pub_markup(key: &Uuid, p: &Pub) -> Markup {
@@ -148,6 +281,7 @@ pub struct CreatePub {
 }
 
 pub async fn create_pub(
+    _: AuthenticatedAdmin,
     State(AppState { mut con, .. }): State<AppState>,
     Form(CreatePub {
         name,
@@ -209,6 +343,7 @@ struct UpdatePub {
 
 //TODO: make the form not update volatile fields like count and queue, and allow partial updates
 pub async fn update_pub(
+    _: AuthenticatedAdmin,
     State(AppState { mut con, pubs, .. }): State<AppState>,
     Form(UpdatePubForm {
         key,
@@ -276,6 +411,7 @@ pub struct ToggleActive {
 }
 
 pub async fn toggle_active(
+    _: AuthenticatedAdmin,
     State(AppState { mut con, .. }): State<AppState>,
     Form(ToggleActive { key, active }): Form<ToggleActive>,
 ) -> impl IntoResponse {
