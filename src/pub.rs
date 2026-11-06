@@ -13,6 +13,7 @@ pub struct Pub {
     pub queue: Queue,
     pub active: bool,
     pub name: String,
+    //TODO: Probably use Uuid instead for better security
     pub count_key: String,
 }
 

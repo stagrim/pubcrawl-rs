@@ -1,8 +1,9 @@
 use std::{env, sync::Arc};
 
+#[cfg(not(debug_assertions))]
+use axum::http::{HeaderValue, header};
 use axum::{
     Router,
-    http::{HeaderValue, header},
     routing::{get, post},
 };
 use dotenvy::dotenv;
@@ -21,9 +22,9 @@ use tokio::{
     },
 };
 use tower_cookies::CookieManagerLayer;
-use tower_http::{
-    compression::CompressionLayer, services::ServeDir, set_header::SetResponseHeaderLayer,
-};
+use tower_http::services::ServeDir;
+#[cfg(not(debug_assertions))]
+use tower_http::{compression::CompressionLayer, set_header::SetResponseHeaderLayer};
 #[cfg(debug_assertions)]
 use tower_livereload::LiveReloadLayer;
 
@@ -71,6 +72,7 @@ async fn main() {
 
     let state = AppState { con, pubs, tx };
 
+    #[cfg(not(debug_assertions))]
     let static_service = tower::ServiceBuilder::new()
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
@@ -83,17 +85,20 @@ async fn main() {
                 .precompressed_gzip(),
         );
 
+    #[cfg(debug_assertions)]
+    let static_service = ServeDir::new("./static");
+
     let html_routes = Router::new()
         .route("/", get(routes::pubs::pubs))
         .route("/admin", get(routes::admin::admin))
-        .route("/count", get(routes::count::count))
-        .route("/count/card", get(routes::count::count_card))
-        .route_layer(CompressionLayer::new());
+        .route("/count", get(routes::count::count));
 
     // TODO: Create a etag system for html routes?
     let app = Router::new()
         .merge(html_routes)
-        .route("/count/updates/{name}", get(routes::sse::count::count))
+        .route("/count/login", post(routes::count::login))
+        .route("/count/logout", post(routes::count::logout))
+        .route("/count/updates", get(routes::sse::count::count))
         .nest(
             "/pub",
             Router::new()
@@ -115,6 +120,21 @@ async fn main() {
     #[cfg(debug_assertions)]
     let app = app.layer(livereload.request_predicate(not_htmx_predicate));
 
+    #[cfg(not(debug_assertions))]
+    let app = app.layer(CompressionLayer::new().compress_when(
+        |status: axum::http::StatusCode,
+         _version: axum::http::Version,
+         headers: &axum::http::HeaderMap,
+         _extensions: &axum::http::Extensions| {
+            status.is_success()
+                && headers
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|ct| !ct.starts_with("text/event-stream"))
+                    .unwrap_or(true)
+        },
+    ));
+
     let mut listenfd = ListenFd::from_env();
     let listener = match listenfd.take_tcp_listener(0).unwrap() {
         // if we are given a tcp listener on listen fd 0, we use that one
@@ -127,16 +147,43 @@ async fn main() {
     };
 
     #[cfg(debug_assertions)]
-    {
-        let mut watcher = notify::recommended_watcher(move |_| reloader.reload()).unwrap();
+    let mut _watcher = {
+        let css_path = std::path::PathBuf::from("static/css/style.min.css");
+        let mut last_css = std::fs::read(&css_path).unwrap_or_default();
+        let mut watcher =
+            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res
+                    && matches!(
+                        event.kind,
+                        notify::EventKind::Modify(_)
+                            | notify::EventKind::Create(_)
+                            | notify::EventKind::Access(notify::event::AccessKind::Close(
+                                notify::event::AccessMode::Write
+                            ))
+                    )
+                    && let Ok(new_css) = std::fs::read(&css_path)
+                    && !new_css.is_empty()
+                    && new_css != last_css
+                {
+                    last_css = new_css;
+                    reloader.reload();
+                }
+            })
+            .unwrap();
         watcher
             .watch(
                 std::path::Path::new("static/css"),
                 notify::RecursiveMode::NonRecursive,
             )
             .unwrap();
-    }
+        watcher
+    };
 
     println!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }

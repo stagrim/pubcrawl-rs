@@ -1,11 +1,15 @@
+use std::net::SocketAddr;
+
 use axum::{
-    Form, debug_handler,
-    extract::{Query, State},
+    Form,
+    extract::{ConnectInfo, FromRequestParts, State},
+    http::{HeaderMap, StatusCode, request::Parts},
     response::IntoResponse,
 };
 use maud::{Markup, html};
 use serde::Deserialize;
 use strum::IntoEnumIterator;
+use tower_cookies::{Cookie, Cookies, cookie::SameSite};
 use uuid::Uuid;
 
 use crate::{
@@ -14,59 +18,192 @@ use crate::{
     routes::utils::{base_templates, theme_extractor::ExplicitTheme},
 };
 
+pub const COUNT_COOKIE_NAME: &str = "count_auth";
+
+pub struct AuthenticatedPub(pub Uuid);
+
+async fn verify_cookie(cookies: &Cookies, state: &AppState) -> Option<Uuid> {
+    let cookie = cookies.get(COUNT_COOKIE_NAME)?;
+    let (uuid_str, count_key) = cookie.value().split_once(':')?;
+    let key = Uuid::parse_str(uuid_str).ok()?;
+
+    let cache = state.pubs.read().await;
+    let p = cache.map.get(&key)?;
+    if p.count_key == count_key {
+        Some(key)
+    } else {
+        None
+    }
+}
+
+impl FromRequestParts<AppState> for AuthenticatedPub {
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let cookies = Cookies::from_request_parts(parts, state)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get cookies"))?;
+
+        verify_cookie(&cookies, state)
+            .await
+            .map(AuthenticatedPub)
+            .ok_or((StatusCode::UNAUTHORIZED, "Unauthorized"))
+    }
+}
+
 pub async fn count(
     State(state): State<AppState>,
+    cookies: Cookies,
     ExplicitTheme(theme): ExplicitTheme,
 ) -> impl IntoResponse {
+    let authed_key = verify_cookie(&cookies, &state).await;
     let cache = state.pubs.read().await;
-    // TODO: this crashes when no pubs are created. Make this work like the real program!
-    let first_pub = cache.map.iter().next().unwrap();
+
+    let content = if let Some(key) = authed_key
+        && let Some(p) = cache.map.get(&key)
+    {
+        count_card_markup(&key, p, cache.version)
+    } else {
+        login_markup(None)
+    };
 
     base_templates::base(
         theme,
         html! {
-            select class="select mb-5" name="key" value=(first_pub.0) hx-get="/count/card" hx-target="#count-card" hx-trigger="change" {
-                @for (key, p) in cache.map.iter() {
-                    option id={"count-option-"(key)} value=(key) { (p.name) }
-                }
-            }
-
             div id="count-card" {
-                (count_card_markup(first_pub.0, first_pub.1, cache.version))
+                (content)
             }
         },
     )
 }
 
-#[derive(Deserialize)]
-pub struct GetCard {
-    key: Uuid,
+fn login_markup(error: Option<&str>) -> Markup {
+    html! {
+        div class="card bg-base-300 w-full max-w-md mx-auto" {
+            div class="card-body" {
+                h2 class="card-title" { "Counter Login" }
+                @if let Some(err) = error {
+                    div class="alert alert-error" { (err) }
+                }
+                form class="flex flex-col gap-2" hx-post="/count/login" hx-target="#count-card" {
+                    label class="input w-full" {
+                        span class="label" { "Count Key:" }
+                        input class="grow" type="password" name="count_key" required autofocus;
+                    }
+                    button class="btn btn-primary w-full" type="submit" { "Login" }
+                }
+            }
+        }
+    }
 }
 
-#[debug_handler]
-pub async fn count_card(
-    Query(GetCard { key }): Query<GetCard>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    let cache = state.pubs.read().await;
-    let p = cache.map.get(&key).unwrap();
+#[derive(Deserialize)]
+pub struct LoginRequest {
+    count_key: String,
+}
 
-    count_card_markup(&key, p, cache.version)
+const CHECK_BANNED_LUA: &str = r#"
+local attempts = tonumber(redis.call("GET", KEYS[1]) or "0")
+return attempts
+"#;
+
+const RECORD_FAIL_LUA: &str = r#"
+local attempts = redis.call("INCR", KEYS[1])
+if attempts == 1 then
+    redis.call("EXPIRE", KEYS[1], 300)
+end
+return attempts
+"#;
+
+fn client_ip(headers: &HeaderMap, ConnectInfo(addr): ConnectInfo<SocketAddr>) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim().to_string())
+        })
+        .unwrap_or_else(|| addr.ip().to_string())
+}
+
+pub async fn login(
+    State(mut state): State<AppState>,
+    cookies: Cookies,
+    headers: HeaderMap,
+    addr: ConnectInfo<SocketAddr>,
+    Form(LoginRequest { count_key }): Form<LoginRequest>,
+) -> impl IntoResponse {
+    let ip = client_ip(&headers, addr);
+    let ban_key = format!("login_attempts:{ip}");
+
+    let attempts: usize = redis::Script::new(CHECK_BANNED_LUA)
+        .key(&ban_key)
+        .invoke_async(&mut state.con)
+        .await
+        .unwrap_or(0);
+
+    if attempts >= 5 {
+        return login_markup(Some("Too many failed attempts. Try again in 5 minutes."));
+    }
+
+    let found = {
+        let cache = state.pubs.read().await;
+        cache
+            .map
+            .iter()
+            .find(|(_, p)| p.count_key == count_key)
+            .map(|(k, p)| (*k, p.clone(), cache.version))
+    };
+
+    if let Some((key, p, version)) = found {
+        let mut cookie = Cookie::new(COUNT_COOKIE_NAME, format!("{key}:{count_key}"));
+        cookie.set_path("/");
+        cookie.set_http_only(true);
+        cookie.set_same_site(SameSite::Lax);
+        cookies.add(cookie);
+
+        count_card_markup(&key, &p, version)
+    } else {
+        let _: usize = redis::Script::new(RECORD_FAIL_LUA)
+            .key(&ban_key)
+            .invoke_async(&mut state.con)
+            .await
+            .unwrap_or(0);
+
+        login_markup(Some("Invalid count key"))
+    }
+}
+
+pub async fn logout(cookies: Cookies) -> impl IntoResponse {
+    let mut cookie = Cookie::new(COUNT_COOKIE_NAME, "");
+    cookie.set_path("/");
+    cookies.remove(cookie);
+
+    login_markup(None)
 }
 
 fn count_card_markup(key: &Uuid, p: &Pub, version: u64) -> Markup {
     html! {
-        div class="card bg-base-300 border-t-6 sm:h-128" style={"border-color:"(p.color)";"} hx-sse:connect={"/count/updates/"(key)"?v="(version)} {
+        div class="card bg-base-300 border-t-6 sm:h-128" style={"border-color:"(p.color)";"} hx-sse:connect={"/count/updates?v="(version)} {
             div class="card-body" {
-                div class="flex flex-row justify-between" {
+                div class="flex flex-row justify-between items-center" {
                     h1 class="card-title" {
                         span id="count-title" class="text-xl font-bold" {(p.name)}
+                    }
+                    button class="btn btn-sm btn-error" hx-post="/count/logout" hx-target="#count-card" {
+                        "Logout"
                     }
                 }
 
                 div class="flex flex-col items-center sm:gap-2" {
                     form class="flex min-h-80 flex-col gap-4 sm:h-full xl:flex-row" hx-swap:inherited="none" {
-                        input type="hidden" name="key" value=(key);
                         div class="join join-vertical sm:h-full" {
                             button
                                 class="join-item btn btn-xl btn-success h-40 w-60 text-5xl sm:h-1/2 sm:w-128 sm:text-6xl"
@@ -107,9 +244,8 @@ fn count_card_markup(key: &Uuid, p: &Pub, version: u64) -> Markup {
     }
 }
 
-pub fn queue_markup(key: &Uuid, queue: &Queue) -> Markup {
+pub fn queue_markup(_key: &Uuid, queue: &Queue) -> Markup {
     html! {
-        input type="hidden" value=(key) name="key";
         @for q in Queue::iter() {
             @let bg_color = match q {
                 Queue::Short => "--color-success",
@@ -123,7 +259,6 @@ pub fn queue_markup(key: &Uuid, queue: &Queue) -> Markup {
 
 #[derive(Deserialize)]
 pub struct IncreaseRequest {
-    key: Uuid,
     delta: Option<isize>,
 }
 
@@ -147,8 +282,9 @@ return new_count
 "#;
 
 pub async fn increase(
+    AuthenticatedPub(key): AuthenticatedPub,
     State(AppState { mut con, .. }): State<AppState>,
-    Form(IncreaseRequest { key, delta }): Form<IncreaseRequest>,
+    Form(IncreaseRequest { delta }): Form<IncreaseRequest>,
 ) -> impl IntoResponse {
     let delta = delta.unwrap_or(1);
     let _: usize = redis::Script::new(UPDATE_PUB)
@@ -162,13 +298,13 @@ pub async fn increase(
 
 #[derive(Deserialize)]
 pub struct QueueRequest {
-    key: Uuid,
     queue: Queue,
 }
 
 pub async fn set_queue(
+    AuthenticatedPub(key): AuthenticatedPub,
     State(AppState { mut con, .. }): State<AppState>,
-    Form(QueueRequest { key, queue }): Form<QueueRequest>,
+    Form(QueueRequest { queue }): Form<QueueRequest>,
 ) -> impl IntoResponse {
     let payload = serde_json::to_string(&PubChange::Queue(key, queue.clone())).unwrap();
     let _: () = redis::pipe()

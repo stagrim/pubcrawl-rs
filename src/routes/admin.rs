@@ -137,6 +137,8 @@ fn pub_markup(key: &Uuid, p: &Pub) -> Markup {
     }
 }
 
+//TODO: Make sure that count_key is unique
+
 #[derive(Deserialize)]
 pub struct CreatePub {
     name: String,
@@ -291,4 +293,3 @@ pub async fn toggle_active(
         .await
         .unwrap();
 }
-

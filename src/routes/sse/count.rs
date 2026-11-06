@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::HeaderMap,
     response::{
         Sse,
@@ -12,16 +12,18 @@ use futures::Stream;
 use maud::html;
 use tokio::sync::broadcast::Receiver;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
-use uuid::Uuid;
 
 use crate::{
     AppState,
     r#pub::{PubBroadcast, PubChange},
-    routes::{count::queue_markup, sse::pubs::VersionQuery},
+    routes::{
+        count::{AuthenticatedPub, queue_markup},
+        sse::pubs::VersionQuery,
+    },
 };
 
 pub async fn count(
-    Path(key): Path<Uuid>,
+    AuthenticatedPub(key): AuthenticatedPub,
     Query(VersionQuery { v }): Query<VersionQuery>,
     headers: HeaderMap,
     State(AppState { pubs, tx, .. }): State<AppState>,
@@ -40,7 +42,6 @@ pub async fn count(
             let evt = cache.map.get(&key).map(|p| {
                 Ok(Event::default().id(cache.version.to_string()).data(
                     html! {
-                        hx-partial id={"count-option-"(key)} { (&p.name) }
                         hx-partial id="count-title" { (&p.name) }
                         hx-partial id="count-value" { (p.count) }
                         hx-partial id="count-capacity" { (p.capacity) }
@@ -81,7 +82,6 @@ pub async fn count(
                         hx-partial id="count-queue" { (queue_markup(&key, &queue)) }
                     },
                     PubChange::UpdateEntirePub(key, p) => html! {
-                        hx-partial id={"count-option-"(key)} { (p.name) }
                         hx-partial id="count-title" { (p.name) }
                         hx-partial id="count-value" { (p.count) }
                         hx-partial id="count-capacity" { (p.capacity) }
@@ -91,7 +91,6 @@ pub async fn count(
                         let cache = pubs.read().await;
                         if let Some(p) = cache.map.get(&key) {
                             html! {
-                                hx-partial id={"count-option-"(key)} { (&p.name) }
                                 hx-partial id="count-title" { (&p.name) }
                                 hx-partial id="count-value" { (p.count) }
                                 hx-partial id="count-capacity" { (p.capacity) }

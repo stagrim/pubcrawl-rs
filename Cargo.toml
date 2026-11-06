@@ -23,7 +23,13 @@ tokio = { version = "1.47.1", features = ["full"] }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
 tower = "0.5.2"
 tower-cookies = "0.11.0"
-tower-http = { version = "0.6.6", features = ["fs", "set-header", "compression-br", "compression-gzip", "compression-zstd"] }
+tower-http = { version = "0.6.6", features = [
+    "fs",
+    "set-header",
+    "compression-br",
+    "compression-gzip",
+    "compression-zstd",
+] }
 tower-livereload = "0.9.6"
 uuid = { version = "1.29.0", features = ["serde", "v4"] }
 
@@ -32,4 +38,3 @@ lto = "thin"
 codegen-units = 1
 strip = true
 panic = "abort"
-
